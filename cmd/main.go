@@ -5,6 +5,7 @@ import (
 	"asset/database"
 	"asset/handler/assetHandler"
 	"asset/handler/userHandler"
+	"asset/middlewareprovider"
 	"asset/repository/asset"
 	"asset/repository/user"
 	"asset/routes"
@@ -23,7 +24,6 @@ import (
 const shutdownTimeout = 10 * time.Second
 
 func main() {
-
 	config.LoadEnv()
 	dbConnectionString := config.GetDatabaseString()
 
@@ -36,12 +36,15 @@ func main() {
 	assetService := assetservice.NewAssetService(assetRepo, database.DB)
 	userService := userservice.NewUserService(userRepo, database.DB)
 
-	assetHandler := assethandler.NewAssetHandler(assetService)
-	userHandler := userhandler.NewUserHandler(userService)
+	authMiddleware := middlewareprovider.NewAuthMiddlewareService()
+
+	assetHandler := assethandler.NewAssetHandler(assetService, authMiddleware)
+	userHandler := userhandler.NewUserHandler(userService, authMiddleware)
 
 	routeHandler := routes.RouteHandler{
-		UserHandler:  userHandler,
-		AssetHandler: assetHandler,
+		UserHandler:    userHandler,
+		AssetHandler:   assetHandler,
+		AuthMiddleware: authMiddleware,
 	}
 	router := routes.RegisterRoutes(routeHandler)
 
