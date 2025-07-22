@@ -23,23 +23,19 @@ import (
 const shutdownTimeout = 10 * time.Second
 
 func main() {
-	// 1. Load environment variables
-	config.LoadEnv()
 
-	// 2. Initialize database
+	config.LoadEnv()
 	dbConnectionString := config.GetDatabaseString()
+
 	database.Init(dbConnectionString)
 	defer database.DB.Close()
 
-	// 3. Setup repositories
 	assetRepo := asset.NewAssetRepository(database.DB)
 	userRepo := user.NewUserRepository(database.DB)
 
-	// 4. Setup services
 	assetService := assetservice.NewAssetService(assetRepo, database.DB)
 	userService := userservice.NewUserService(userRepo, database.DB)
 
-	// 5. Setup handlers
 	assetHandler := assethandler.NewAssetHandler(assetService)
 	userHandler := userhandler.NewUserHandler(userService)
 
@@ -49,7 +45,6 @@ func main() {
 	}
 	router := routes.RegisterRoutes(routeHandler)
 
-	// 7. Setup HTTP server
 	server := &http.Server{
 		Addr:    ":8080",
 		Handler: router,
