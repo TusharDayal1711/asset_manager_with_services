@@ -22,7 +22,7 @@ type AssetService interface {
 	RetrieveAsset(ctx context.Context, req models.AssetReturnReq) error
 	SendAssetToService(ctx context.Context, req models.AssetServiceReq, managerID uuid.UUID) error
 	UpdateAsset(ctx context.Context, req models.UpdateAssetReq) error
-	UpdateAssetWithConfig(ctx context.Context, req models.UpdateAssetReq) error // Added context here
+	UpdateAssetWithConfig(ctx context.Context, req models.UpdateAssetReq) error
 }
 
 type AssetHandler struct {

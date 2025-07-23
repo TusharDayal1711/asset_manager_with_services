@@ -2,7 +2,7 @@ package user
 
 import (
 	"asset/models"
-	"context" // Import context package
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -13,7 +13,6 @@ import (
 	"github.com/lib/pq"
 )
 
-// UserRepository defines the interface for user data operations.
 type UserRepository interface {
 	DeleteUserByID(ctx context.Context, userID uuid.UUID) error
 	GetUserByEmail(ctx context.Context, userEmail string) (uuid.UUID, error)
@@ -33,7 +32,6 @@ type UserRepository interface {
 	ArchiveUserRoles(ctx context.Context, tx *sqlx.Tx, userID uuid.UUID) error
 }
 
-// PostgresUserRepository implements UserRepository for PostgreSQL.
 type PostgresUserRepository struct {
 	DB *sqlx.DB
 }
@@ -71,7 +69,6 @@ func (r *PostgresUserRepository) DeleteUserByID(ctx context.Context, userID uuid
 		return fmt.Errorf("cannot delete user, still have asset assigned")
 	}
 
-	// Use ExecContext to update the users table within the transaction.
 	_, err = tx.ExecContext(ctx, `
 		UPDATE users SET archived_at = now() WHERE id = $1 AND archived_at IS NULL
 	`, userID)
@@ -79,7 +76,6 @@ func (r *PostgresUserRepository) DeleteUserByID(ctx context.Context, userID uuid
 		return fmt.Errorf("failed to delete user: %w", err)
 	}
 
-	// Use ExecContext to update the user_roles table within the transaction.
 	_, err = tx.ExecContext(ctx, `
 		UPDATE user_roles SET archived_at = now() WHERE user_id = $1 AND archived_at IS NULL
 	`, userID)
@@ -87,7 +83,6 @@ func (r *PostgresUserRepository) DeleteUserByID(ctx context.Context, userID uuid
 		return fmt.Errorf("failed to delete user roles: %w", err)
 	}
 
-	// Use ExecContext to update the user_type table within the transaction.
 	_, err = tx.ExecContext(ctx, `
 		UPDATE user_type SET archived_at = now() WHERE user_id = $1 AND archived_at IS NULL
 	`, userID)
@@ -98,10 +93,9 @@ func (r *PostgresUserRepository) DeleteUserByID(ctx context.Context, userID uuid
 	return nil
 }
 
-// GetUserByEmail retrieves a user's ID by their email.
 func (r *PostgresUserRepository) GetUserByEmail(ctx context.Context, userEmail string) (uuid.UUID, error) {
 	var userId uuid.UUID
-	// Use GetContext to fetch the user ID.
+
 	err := r.DB.GetContext(ctx, &userId, `
 		SELECT id FROM users
 		WHERE email = $1 AND archived_at IS NULL
@@ -115,15 +109,11 @@ func (r *PostgresUserRepository) GetUserByEmail(ctx context.Context, userEmail s
 	return userId, nil
 }
 
-// GetUserDashboardById retrieves comprehensive dashboard information for a user.
-// It uses a transaction to fetch user details, roles, and assigned assets.
 func (r *PostgresUserRepository) GetUserDashboardById(ctx context.Context, userID uuid.UUID) (user models.UserDashboardRes, err error) {
-	// Begin a new transaction with the provided context.
 	tx, err := r.DB.BeginTxx(ctx, nil)
 	if err != nil {
 		return user, fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	// Defer a rollback for safety; commit will be explicit at the end.
 	defer func() {
 		if p := recover(); p != nil {
 			tx.Rollback()
@@ -135,7 +125,6 @@ func (r *PostgresUserRepository) GetUserDashboardById(ctx context.Context, userI
 		}
 	}()
 
-	// Use GetContext within the transaction to fetch user details.
 	err = tx.GetContext(ctx, &user, `
 		SELECT u.id, u.username, u.email, u.contact_no, ut.type
 		FROM users u
@@ -167,10 +156,8 @@ func (r *PostgresUserRepository) GetUserDashboardById(ctx context.Context, userI
 	return user, nil
 }
 
-// GetUserRoleById retrieves a user's role by their ID.
 func (r *PostgresUserRepository) GetUserRoleById(ctx context.Context, userId uuid.UUID) (string, error) {
 	var userRole string
-	// Use GetContext to fetch the user role.
 	err := r.DB.GetContext(ctx, &userRole, `
 		SELECT role FROM user_roles 
 		WHERE user_id = $1 AND archived_at IS NULL
@@ -184,10 +171,9 @@ func (r *PostgresUserRepository) GetUserRoleById(ctx context.Context, userId uui
 	return userRole, nil
 }
 
-// GetUserAssetTimeline retrieves a user's asset assignment history.
 func (r *PostgresUserRepository) GetUserAssetTimeline(ctx context.Context, userID uuid.UUID) ([]models.UserTimelineRes, error) {
 	timeline := make([]models.UserTimelineRes, 0)
-	// Use SelectContext to fetch the user's asset timeline.
+
 	err := r.DB.SelectContext(ctx, &timeline, `
 		SELECT 
 			a.asset_id,
@@ -208,10 +194,8 @@ func (r *PostgresUserRepository) GetUserAssetTimeline(ctx context.Context, userI
 	return timeline, nil
 }
 
-// CreateNewEmployee creates a new employee entry.
 func (r *PostgresUserRepository) CreateNewEmployee(ctx context.Context, tx *sqlx.Tx, req models.ManagerRegisterReq, managerUUID uuid.UUID) (uuid.UUID, error) {
 	var userID uuid.UUID
-	// Use GetContext within the provided transaction to insert and return the new employee's ID.
 	err := tx.GetContext(ctx, &userID, `
 		INSERT INTO users (username, email, contact_no)
 		VALUES ($1, $2, $3)
@@ -220,9 +204,6 @@ func (r *PostgresUserRepository) CreateNewEmployee(ctx context.Context, tx *sqlx
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("failed to insert employee: %w", err)
 	}
-
-	// Insert employee type in user_type table
-	// Use ExecContext within the provided transaction.
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO user_type (user_id, type, created_by)
 		VALUES ($1, $2, $3)
@@ -230,8 +211,7 @@ func (r *PostgresUserRepository) CreateNewEmployee(ctx context.Context, tx *sqlx
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("failed to insert employee type: %w", err)
 	}
-	// Insert employee role in user_roles table
-	// Use ExecContext within the provided transaction.
+
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO user_roles (user_id, role, created_by)
 		VALUES ($1, 'employee', $2)
@@ -243,7 +223,6 @@ func (r *PostgresUserRepository) CreateNewEmployee(ctx context.Context, tx *sqlx
 	return userID, nil
 }
 
-// GetFilteredEmployeesWithAssets retrieves filtered employee data with their assets.
 func (r *PostgresUserRepository) GetFilteredEmployeesWithAssets(ctx context.Context, filter models.EmployeeFilter) ([]models.EmployeeResponseModel, error) {
 	args := []interface{}{
 		!filter.IsSearchText,
@@ -292,7 +271,6 @@ LIMIT $6 OFFSET $7;
 	return rows, nil
 }
 
-// UpdateEmployeeInfo updates an employee's information.
 func (r *PostgresUserRepository) UpdateEmployeeInfo(ctx context.Context, req models.UpdateEmployeeReq, adminUUID uuid.UUID) error {
 	query := `UPDATE users SET `
 	args := []interface{}{}
@@ -318,11 +296,10 @@ func (r *PostgresUserRepository) UpdateEmployeeInfo(ctx context.Context, req mod
 	args = append(args, adminUUID)
 	argPos++
 
-	query = strings.TrimSuffix(query, ", ") // In case no fields are updated before `updated_by`
+	query = strings.TrimSuffix(query, ", ")
 	query += fmt.Sprintf("WHERE id = $%d AND archived_at IS NULL", argPos)
 	args = append(args, req.UserID)
 
-	// Use ExecContext to update the user.
 	result, err := r.DB.ExecContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("failed to update user: %w", err)
@@ -335,8 +312,6 @@ func (r *PostgresUserRepository) UpdateEmployeeInfo(ctx context.Context, req mod
 	return nil
 }
 
-// InsertUserRole inserts a new user role.
-// NOTE: The original query had `id` in VALUES but not in columns. Assuming `id` is auto-generated.
 func (r *PostgresUserRepository) InsertUserRole(ctx context.Context, tx *sqlx.Tx, userID uuid.UUID, role string, createdBy uuid.UUID) error {
 	_, err := tx.ExecContext(ctx, `
 		INSERT INTO user_roles (role, user_id, created_by)
@@ -348,7 +323,6 @@ func (r *PostgresUserRepository) InsertUserRole(ctx context.Context, tx *sqlx.Tx
 	return nil
 }
 
-// UpdateUserRole updates a user's role by archiving the old role and inserting a new one.
 func (r *PostgresUserRepository) UpdateUserRole(ctx context.Context, tx *sqlx.Tx, userID uuid.UUID, newRole string, updatedBy uuid.UUID) error {
 	currentRole, err := r.GetCurrentUserRole(ctx, tx, userID) // Pass ctx
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -366,10 +340,9 @@ func (r *PostgresUserRepository) UpdateUserRole(ctx context.Context, tx *sqlx.Tx
 	return nil
 }
 
-// GetCurrentUserRole retrieves the current user's role.
 func (r *PostgresUserRepository) GetCurrentUserRole(ctx context.Context, tx *sqlx.Tx, userID uuid.UUID) (string, error) {
 	var role string
-	// Use GetContext within the provided transaction.
+
 	err := tx.GetContext(ctx, &role, `
 		SELECT role FROM user_roles
 		WHERE user_id = $1 AND archived_at IS NULL
@@ -380,9 +353,8 @@ func (r *PostgresUserRepository) GetCurrentUserRole(ctx context.Context, tx *sql
 	return role, nil
 }
 
-// ArchiveUserRoles archives existing roles for a user.
 func (r *PostgresUserRepository) ArchiveUserRoles(ctx context.Context, tx *sqlx.Tx, userID uuid.UUID) error {
-	// Use ExecContext within the provided transaction.
+
 	_, err := tx.ExecContext(ctx, `
 		UPDATE user_roles
 		SET archived_at = now(), last_updated_at = now()
@@ -394,10 +366,8 @@ func (r *PostgresUserRepository) ArchiveUserRoles(ctx context.Context, tx *sqlx.
 	return nil
 }
 
-// IsUserExists checks if a user with the given email exists.
 func (r *PostgresUserRepository) IsUserExists(ctx context.Context, tx *sqlx.Tx, email string) (bool, error) {
 	var id uuid.UUID
-	// Use QueryRowContext within the provided transaction.
 	err := tx.QueryRowContext(ctx, `
 		SELECT id FROM users 
 		WHERE email = $1 AND archived_at IS NULL
@@ -411,11 +381,9 @@ func (r *PostgresUserRepository) IsUserExists(ctx context.Context, tx *sqlx.Tx, 
 	return true, nil
 }
 
-// InsertIntoUser inserts a new user into the users table.
 func (r *PostgresUserRepository) InsertIntoUser(ctx context.Context, tx *sqlx.Tx, username, email string) (uuid.UUID, error) {
 	var id uuid.UUID
 
-	// Use GetContext within the provided transaction.
 	err := tx.GetContext(ctx, &id, `
 		INSERT INTO users (username, email)
 		VALUES ($1, $2)
@@ -424,7 +392,7 @@ func (r *PostgresUserRepository) InsertIntoUser(ctx context.Context, tx *sqlx.Tx
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("failed to insert user: %w", err)
 	}
-	// Use ExecContext within the provided transaction.
+
 	_, err = tx.ExecContext(ctx, `
 		UPDATE users SET created_by = $1 WHERE id = $1
 	`, id)
@@ -434,9 +402,7 @@ func (r *PostgresUserRepository) InsertIntoUser(ctx context.Context, tx *sqlx.Tx
 	return id, nil
 }
 
-// InsertIntoUserRole inserts a new user role into the user_roles table.
 func (r *PostgresUserRepository) InsertIntoUserRole(ctx context.Context, tx *sqlx.Tx, userId uuid.UUID, role string, createdBy uuid.UUID) error {
-	// Use ExecContext within the provided transaction.
 	_, err := tx.ExecContext(ctx, `
 		INSERT INTO user_roles (role, user_id, created_by)
 		VALUES ($1, $2, $3)
@@ -447,9 +413,8 @@ func (r *PostgresUserRepository) InsertIntoUserRole(ctx context.Context, tx *sql
 	return nil
 }
 
-// InsertIntoUserType inserts a new user type into the user_type table.
 func (r *PostgresUserRepository) InsertIntoUserType(ctx context.Context, tx *sqlx.Tx, userId uuid.UUID, employeeType string, createdBy uuid.UUID) error {
-	// Use ExecContext within the provided transaction.
+
 	_, err := tx.ExecContext(ctx, `
 		INSERT INTO user_type (type, user_id, created_by)
 		VALUES ($1, $2, $3)
