@@ -13,7 +13,6 @@ var (
 	refreshTokenSecretKey = []byte(os.Getenv("REFRESH_TOKEN"))
 )
 
-// GenerateJWT creates a new JWT access token with userID and roles.
 func GenerateJWT(userID string, roles []string) (string, error) {
 	claims := jwt.MapClaims{
 		"sub":   userID,
@@ -36,7 +35,6 @@ func GenerateRefreshToken(userID string) (string, error) {
 	return token.SignedString(refreshTokenSecretKey)
 }
 
-// ParseJWT validates and extracts userID and roles from a JWT access token.
 func ParseJWT(tokenStr string) (string, []string, error) {
 	token, err := jwt.Parse(tokenStr, func(token *jwt.Token) (interface{}, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {

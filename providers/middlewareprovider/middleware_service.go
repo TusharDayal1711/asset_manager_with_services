@@ -1,11 +1,12 @@
 package middlewareprovider
 
 import (
-	"asset/database"
 	"asset/models"
+	"asset/providers"
 	"asset/utils"
 	"context"
 	"errors"
+	"github.com/jmoiron/sqlx"
 	"net/http"
 	"strings"
 )
@@ -17,16 +18,21 @@ const (
 	rolesContextKey contextKey = "roles_key"
 )
 
-type DefaultAuthMiddleware struct{}
+type DefaultAuthMiddleware struct {
+	db *sqlx.DB
+}
 
-func NewAuthMiddlewareService() AuthMiddlewareService {
-	return &DefaultAuthMiddleware{}
+func NewAuthMiddlewareService(db *sqlx.DB) providers.AuthMiddlewareService {
+	return &DefaultAuthMiddleware{
+		db: db,
+	}
 }
 
 func (a *DefaultAuthMiddleware) JWTAuthMiddleware() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			accessToken := r.Header.Get("Authorization")
+
 			if accessToken == "" {
 				utils.RespondError(w, http.StatusUnauthorized, errors.New("missing access token"), "missing access token")
 				return
@@ -44,19 +50,22 @@ func (a *DefaultAuthMiddleware) JWTAuthMiddleware() func(http.Handler) http.Hand
 					utils.RespondError(w, http.StatusUnauthorized, err, "invalid or expired refresh token")
 					return
 				}
+
 				var dbRoles []string
-				err = database.DB.Select(&dbRoles, `SELECT role FROM user_roles WHERE user_id = $1 AND archived_at IS NULL`, userID)
+				err = a.db.Select(&dbRoles, `SELECT role FROM user_roles WHERE user_id = $1 AND archived_at IS NULL`, userID)
 				if err != nil {
 					utils.RespondError(w, http.StatusInternalServerError, err, "failed to fetch roles")
 					return
 				}
 				roles = dbRoles
 
+				//generate new token
 				newAccessToken, err := GenerateJWT(userID, roles)
 				if err != nil {
 					utils.RespondError(w, http.StatusInternalServerError, err, "failed to generate access token")
 					return
 				}
+				//generate new refresh token
 				newRefreshToken, err := GenerateRefreshToken(userID)
 				if err != nil {
 					utils.RespondError(w, http.StatusInternalServerError, err, "failed to generate refresh token")
