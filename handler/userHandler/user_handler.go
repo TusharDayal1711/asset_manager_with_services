@@ -1,8 +1,9 @@
-package userservice
+package userhandler
 
 import (
 	"asset/models"
 	"asset/providers"
+	"asset/services/user"
 	"asset/utils"
 	"encoding/json"
 	"fmt"
@@ -14,11 +15,11 @@ import (
 )
 
 type UserHandler struct {
-	Service        UserService
+	Service        userservice.UserService
 	AuthMiddleware providers.AuthMiddlewareService
 }
 
-func NewUserHandler(service UserService, auth providers.AuthMiddlewareService) *UserHandler {
+func NewUserHandler(service userservice.UserService, auth providers.AuthMiddlewareService) *UserHandler {
 	return &UserHandler{
 		Service:        service,
 		AuthMiddleware: auth,
