@@ -3,7 +3,6 @@ package userservice
 import (
 	"asset/middlewares"
 	"asset/models"
-	"asset/repository/user"
 	"context"
 	"database/sql"
 	"errors"
@@ -25,11 +24,11 @@ type UserService interface {
 }
 
 type userService struct {
-	repo user.UserRepository
+	repo UserRepository
 	db   *sqlx.DB
 }
 
-func NewUserService(repo user.UserRepository, db *sqlx.DB) UserService {
+func NewUserService(repo UserRepository, db *sqlx.DB) UserService {
 	return &userService{repo: repo, db: db}
 }
 

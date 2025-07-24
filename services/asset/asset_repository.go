@@ -1,4 +1,4 @@
-package asset
+package assetservice
 
 import (
 	"asset/models"

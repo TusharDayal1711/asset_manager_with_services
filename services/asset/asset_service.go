@@ -2,9 +2,9 @@ package assetservice
 
 import (
 	"asset/models"
-	"asset/repository/asset"
 	"context"
 	"encoding/json"
+
 	"errors"
 	"fmt"
 	"github.com/google/uuid"
@@ -25,11 +25,11 @@ type AssetService interface {
 }
 
 type assetService struct {
-	repo asset.AssetRepository
+	repo AssetRepository
 	db   *sqlx.DB
 }
 
-func NewAssetService(repo asset.AssetRepository, db *sqlx.DB) AssetService {
+func NewAssetService(repo AssetRepository, db *sqlx.DB) AssetService {
 	return &assetService{repo: repo, db: db}
 }
 
