@@ -4,12 +4,16 @@ import (
 	"asset/models"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"net/http"
 )
 
 func (srv *Server) InjectRoutes() *chi.Mux {
 	r := chi.NewRouter()
 
-	r.Use(middleware.Logger)
+	r.Use(middleware.Logger) // Optional: helpful for dev/debug
+	r.Get("/test", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("connection established..."))
+	})
 
 	//public routes
 	r.Route("/api", func(api chi.Router) {

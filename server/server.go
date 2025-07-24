@@ -1,16 +1,12 @@
 package server
 
 import (
-	"asset/handler/assetHandler"
-	"asset/handler/userHandler"
 	"asset/providers"
 	"asset/providers/configProvider"
 	"asset/providers/databaseProvider"
 	"asset/providers/middlewareprovider"
-	assetrepo "asset/repository/asset"
-	userrepo "asset/repository/user"
-	assetservice "asset/services/asset"
-	userservice "asset/services/user"
+	"asset/services/asset"
+	"asset/services/user"
 	"context"
 	"fmt"
 	"log"
@@ -22,8 +18,8 @@ type Server struct {
 	Config       providers.ConfigProvider
 	DB           providers.DBProvider
 	Middleware   providers.AuthMiddlewareService
-	UserHandler  *userhandler.UserHandler
-	AssetHandler *assethandler.AssetHandler
+	UserHandler  *userservice.UserHandler
+	AssetHandler *assetservice.AssetHandler
 	httpServer   *http.Server
 }
 
@@ -35,16 +31,16 @@ func SrvInit() *Server {
 	middleware := middlewareprovider.NewAuthMiddlewareService(db.DB())
 
 	// repositories
-	userRepo := userrepo.NewUserRepository(db.DB())
-	assetRepo := assetrepo.NewAssetRepository(db.DB())
+	userRepo := userservice.NewUserRepository(db.DB())
+	assetRepo := assetservice.NewAssetRepository(db.DB())
 
 	// services
 	userService := userservice.NewUserService(userRepo, db.DB())
 	assetService := assetservice.NewAssetService(assetRepo, db.DB())
 
 	// handlers
-	userHandler := userhandler.NewUserHandler(userService, middleware)
-	assetHandler := assethandler.NewAssetHandler(assetService, middleware)
+	userHandler := userservice.NewUserHandler(userService, middleware)
+	assetHandler := assetservice.NewAssetHandler(assetService, middleware)
 
 	return &Server{
 		Config:       cfg,
