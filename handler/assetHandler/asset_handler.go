@@ -1,10 +1,9 @@
-package assethandler
+package asset
 
 import (
-	"asset/middlewareprovider"
 	"asset/models"
+	"asset/providers"
 	"asset/utils"
-	"context"
 	"encoding/json"
 	"github.com/go-playground/validator/v10"
 	"github.com/google/uuid"
@@ -12,25 +11,12 @@ import (
 	"strings"
 )
 
-type AssetService interface {
-	AddAssetWithConfig(ctx context.Context, req models.AddAssetWithConfigReq, userID uuid.UUID) error
-	AssignAsset(ctx context.Context, assetID, userID, managerUUID uuid.UUID) error
-	DeleteAsset(ctx context.Context, assetID uuid.UUID) error
-	GetAllAssetsWithFilters(ctx context.Context, filter models.AssetFilter) ([]models.AssetWithConfigRes, error)
-	GetAssetTimeline(ctx context.Context, assetID uuid.UUID) ([]models.AssetTimelineEvent, error)
-	ReceiveAssetFromService(ctx context.Context, assetID uuid.UUID) error
-	RetrieveAsset(ctx context.Context, req models.AssetReturnReq) error
-	SendAssetToService(ctx context.Context, req models.AssetServiceReq, managerID uuid.UUID) error
-	UpdateAsset(ctx context.Context, req models.UpdateAssetReq) error
-	UpdateAssetWithConfig(ctx context.Context, req models.UpdateAssetReq) error
-}
-
 type AssetHandler struct {
 	Service        AssetService
-	AuthMiddleware middlewareprovider.AuthMiddlewareService
+	AuthMiddleware providers.AuthMiddlewareService
 }
 
-func NewAssetHandler(service AssetService, auth middlewareprovider.AuthMiddlewareService) *AssetHandler {
+func NewAssetHandler(service AssetService, auth providers.AuthMiddlewareService) *AssetHandler {
 	return &AssetHandler{
 		Service:        service,
 		AuthMiddleware: auth,
