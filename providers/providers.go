@@ -3,6 +3,7 @@ package providers
 import (
 	"asset/models"
 	"github.com/jmoiron/sqlx"
+	"go.uber.org/zap"
 	"net/http"
 )
 
@@ -21,4 +22,10 @@ type ConfigProvider interface {
 type DBProvider interface {
 	DB() *sqlx.DB
 	Close() error
+}
+
+type ZapLoggerProvider interface {
+	InitLogger()
+	SyncLogger()
+	GetLogger() *zap.Logger
 }
