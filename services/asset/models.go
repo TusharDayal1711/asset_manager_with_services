@@ -188,3 +188,35 @@ type AssetFilter struct {
 //	Type     string `schema:"type"`
 //	OwnedBy  string `schema:"owned_by"`
 //}
+
+type assetSpecificationReq struct {
+	Processor      string `json:"processor,omitempty"`
+	Ram            string `json:"ram,omitempty"`
+	Os             string `json:"os,omitempty"`
+	DPI            string `json:"dpi,omitempty"`
+	Display        string `json:"display,omitempty"`
+	Resolution     string `json:"resolution,omitempty"`
+	Port           string `json:"port,omitempty"`
+	Type           string `json:"type,omitempty"`
+	Storage        string `json:"storage,omitempty"`
+	Version        string `json:"version,omitempty"`
+	IMEI1          string `json:"imei_1,omitempty"`
+	IMEI2          string `json:"imei_2,omitempty"`
+	AdditionalInfo string `json:"additional_info,omitempty"`
+}
+
+type assetSpecificationRes struct {
+	Processor      string `json:"processor,omitempty" db:"processor"`
+	Ram            string `json:"ram,omitempty" db:"ram"`
+	Os             string `json:"os,omitempty" db:"os"`
+	DPI            string `json:"dpi,omitempty" db:"dpi"`
+	Display        string `json:"display,omitempty" db:"display"`
+	Resolution     string `json:"resolution,omitempty" db:"resolution"`
+	Port           string `json:"port,omitempty" db:"port"`
+	Type           string `json:"type,omitempty" db:"type"`
+	Storage        string `json:"storage,omitempty" db:"storage"`
+	Version        string `json:"version,omitempty" db:"version"`
+	IMEI1          string `json:"imei_1,omitempty" db:"imei_1"`
+	IMEI2          string `json:"imei_2,omitempty" db:"imei_2"`
+	AdditionalInfo string `json:"additional_info,omitempty" db:"additional_info"`
+}
