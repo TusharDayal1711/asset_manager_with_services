@@ -1,11 +1,12 @@
 package userservice
 
 import (
-	"asset/models"
+	"asset/utils"
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
+	"go.uber.org/zap"
 	"strings"
 
 	"github.com/google/uuid"
@@ -16,13 +17,13 @@ import (
 type UserRepository interface {
 	DeleteUserByID(ctx context.Context, userID uuid.UUID) error
 	GetUserByEmail(ctx context.Context, userEmail string) (uuid.UUID, error)
-	GetUserDashboardById(ctx context.Context, userID uuid.UUID) (models.UserDashboardRes, error)
+	GetUserDashboardById(ctx context.Context, userID uuid.UUID) (UserDashboardRes, error)
 	GetUserRoleById(ctx context.Context, userId uuid.UUID) (string, error)
-	GetUserAssetTimeline(ctx context.Context, userID uuid.UUID) ([]models.UserTimelineRes, error)
+	GetUserAssetTimeline(ctx context.Context, userID uuid.UUID) ([]UserTimelineRes, error)
 	IsUserExists(ctx context.Context, tx *sqlx.Tx, email string) (bool, error)
-	CreateNewEmployee(ctx context.Context, tx *sqlx.Tx, req models.ManagerRegisterReq, managerUUID uuid.UUID) (uuid.UUID, error)
-	GetFilteredEmployeesWithAssets(ctx context.Context, filter models.EmployeeFilter) ([]models.EmployeeResponseModel, error)
-	UpdateEmployeeInfo(ctx context.Context, req models.UpdateEmployeeReq, adminUUID uuid.UUID) error
+	CreateNewEmployee(ctx context.Context, tx *sqlx.Tx, req ManagerRegisterReq, managerUUID uuid.UUID) (uuid.UUID, error)
+	GetFilteredEmployeesWithAssets(ctx context.Context, filter EmployeeFilter) ([]EmployeeResponseModel, error)
+	UpdateEmployeeInfo(ctx context.Context, req UpdateEmployeeReq, adminUUID uuid.UUID) error
 	GetCurrentUserRole(ctx context.Context, tx *sqlx.Tx, userID uuid.UUID) (string, error)
 	InsertIntoUser(ctx context.Context, tx *sqlx.Tx, username, email string) (uuid.UUID, error)
 	InsertIntoUserType(ctx context.Context, tx *sqlx.Tx, userId uuid.UUID, employeeType string, createdBy uuid.UUID) error
@@ -109,7 +110,7 @@ func (r *PostgresUserRepository) GetUserByEmail(ctx context.Context, userEmail s
 	return userId, nil
 }
 
-func (r *PostgresUserRepository) GetUserDashboardById(ctx context.Context, userID uuid.UUID) (user models.UserDashboardRes, err error) {
+func (r *PostgresUserRepository) GetUserDashboardById(ctx context.Context, userID uuid.UUID) (user UserDashboardRes, err error) {
 	tx, err := r.DB.BeginTxx(ctx, nil)
 	if err != nil {
 		return user, fmt.Errorf("failed to begin transaction: %w", err)
@@ -171,8 +172,8 @@ func (r *PostgresUserRepository) GetUserRoleById(ctx context.Context, userId uui
 	return userRole, nil
 }
 
-func (r *PostgresUserRepository) GetUserAssetTimeline(ctx context.Context, userID uuid.UUID) ([]models.UserTimelineRes, error) {
-	timeline := make([]models.UserTimelineRes, 0)
+func (r *PostgresUserRepository) GetUserAssetTimeline(ctx context.Context, userID uuid.UUID) ([]UserTimelineRes, error) {
+	timeline := make([]UserTimelineRes, 0)
 
 	err := r.DB.SelectContext(ctx, &timeline, `
 		SELECT 
@@ -194,7 +195,7 @@ func (r *PostgresUserRepository) GetUserAssetTimeline(ctx context.Context, userI
 	return timeline, nil
 }
 
-func (r *PostgresUserRepository) CreateNewEmployee(ctx context.Context, tx *sqlx.Tx, req models.ManagerRegisterReq, managerUUID uuid.UUID) (uuid.UUID, error) {
+func (r *PostgresUserRepository) CreateNewEmployee(ctx context.Context, tx *sqlx.Tx, req ManagerRegisterReq, managerUUID uuid.UUID) (uuid.UUID, error) {
 	var userID uuid.UUID
 	err := tx.GetContext(ctx, &userID, `
 		INSERT INTO users (username, email, contact_no)
@@ -223,7 +224,7 @@ func (r *PostgresUserRepository) CreateNewEmployee(ctx context.Context, tx *sqlx
 	return userID, nil
 }
 
-func (r *PostgresUserRepository) GetFilteredEmployeesWithAssets(ctx context.Context, filter models.EmployeeFilter) ([]models.EmployeeResponseModel, error) {
+func (r *PostgresUserRepository) GetFilteredEmployeesWithAssets(ctx context.Context, filter EmployeeFilter) ([]EmployeeResponseModel, error) {
 	args := []interface{}{
 		!filter.IsSearchText,
 		filter.SearchText,
@@ -263,7 +264,7 @@ LIMIT $6 OFFSET $7;
 
     `
 
-	rows := []models.EmployeeResponseModel{}
+	rows := []EmployeeResponseModel{}
 	err := r.DB.SelectContext(ctx, &rows, query, args...)
 	if err != nil {
 		return nil, err
@@ -271,7 +272,7 @@ LIMIT $6 OFFSET $7;
 	return rows, nil
 }
 
-func (r *PostgresUserRepository) UpdateEmployeeInfo(ctx context.Context, req models.UpdateEmployeeReq, adminUUID uuid.UUID) error {
+func (r *PostgresUserRepository) UpdateEmployeeInfo(ctx context.Context, req UpdateEmployeeReq, adminUUID uuid.UUID) error {
 	query := `UPDATE users SET `
 	args := []interface{}{}
 	argPos := 1
@@ -367,6 +368,7 @@ func (r *PostgresUserRepository) ArchiveUserRoles(ctx context.Context, tx *sqlx.
 }
 
 func (r *PostgresUserRepository) IsUserExists(ctx context.Context, tx *sqlx.Tx, email string) (bool, error) {
+	utils.Logger.Info("inside IsUSerExits...", zap.String("incoming email:", email))
 	var id uuid.UUID
 	err := tx.QueryRowContext(ctx, `
 		SELECT id FROM users 
@@ -376,20 +378,23 @@ func (r *PostgresUserRepository) IsUserExists(ctx context.Context, tx *sqlx.Tx, 
 		return false, nil
 	}
 	if err != nil {
+		utils.Logger.Error("failed to check if user exists", zap.Error(err))
 		return false, fmt.Errorf("failed to check existing user: %w", err)
 	}
+	utils.Logger.Info("user exists, returning true", zap.String("user", email))
 	return true, nil
 }
 
 func (r *PostgresUserRepository) InsertIntoUser(ctx context.Context, tx *sqlx.Tx, username, email string) (uuid.UUID, error) {
+	utils.Logger.Info("inside InsertIntoUser, with values ::", zap.String("email:", email), zap.String("username:", username))
 	var id uuid.UUID
-
 	err := tx.GetContext(ctx, &id, `
 		INSERT INTO users (username, email)
 		VALUES ($1, $2)
 		RETURNING id
 	`, username, email)
 	if err != nil {
+		utils.Logger.Error("failed to insert into users", zap.Error(err))
 		return uuid.Nil, fmt.Errorf("failed to insert user: %w", err)
 	}
 
@@ -397,6 +402,7 @@ func (r *PostgresUserRepository) InsertIntoUser(ctx context.Context, tx *sqlx.Tx
 		UPDATE users SET created_by = $1 WHERE id = $1
 	`, id)
 	if err != nil {
+		utils.Logger.Error("failed to insert into users", zap.Error(err))
 		return uuid.Nil, fmt.Errorf("failed to update created_by: %w", err)
 	}
 	return id, nil

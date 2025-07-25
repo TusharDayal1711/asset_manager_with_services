@@ -1,7 +1,6 @@
 package userservice
 
 import (
-	"asset/models"
 	"asset/providers"
 	"asset/utils"
 	"encoding/json"
@@ -9,6 +8,7 @@ import (
 	"github.com/go-playground/validator/v10"
 	"github.com/google/uuid"
 	jsoniter "github.com/json-iterator/go"
+	"go.uber.org/zap"
 	"net/http"
 	"strings"
 )
@@ -36,7 +36,7 @@ func (h *UserHandler) ChangeUserRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req models.UpdateUserRoleReq
+	var req UpdateUserRoleReq
 	if err := utils.ParseJSONBody(r, &req); err != nil {
 		utils.RespondError(w, http.StatusBadRequest, err, "invalid request body")
 		return
@@ -92,7 +92,7 @@ func (h *UserHandler) GetEmployeesWithFilters(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	filter := models.EmployeeFilter{
+	filter := EmployeeFilter{
 		SearchText:   r.URL.Query().Get("search"),
 		IsSearchText: r.URL.Query().Get("search") != "",
 		Type:         strings.Split(r.URL.Query().Get("type"), ","),
@@ -129,8 +129,9 @@ func (h *UserHandler) GetEmployeeTimeline(w http.ResponseWriter, r *http.Request
 }
 
 func (h *UserHandler) PublicRegister(w http.ResponseWriter, r *http.Request) {
-	var req models.PublicUserReq
+	var req PublicUserReq
 	if err := utils.ParseJSONBody(r, &req); err != nil {
+		utils.Logger.Error("Failed to parse request body", zap.Error(err))
 		utils.RespondError(w, http.StatusBadRequest, err, "invalid input")
 		return
 	}
@@ -153,7 +154,7 @@ func (h *UserHandler) RegisterEmployeeByManager(w http.ResponseWriter, r *http.R
 		utils.RespondError(w, http.StatusUnauthorized, err, "unauthorized")
 		return
 	}
-	var req models.ManagerRegisterReq
+	var req ManagerRegisterReq
 	if err := utils.ParseJSONBody(r, &req); err != nil {
 		utils.RespondError(w, http.StatusBadRequest, err, "invalid input body")
 		return
@@ -180,7 +181,7 @@ func (h *UserHandler) UpdateEmployee(w http.ResponseWriter, r *http.Request) {
 	}
 	managerUUID, _ := uuid.Parse(managerID)
 
-	var req models.UpdateEmployeeReq
+	var req UpdateEmployeeReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		utils.RespondError(w, http.StatusBadRequest, err, "invalid request body")
 		return
@@ -202,7 +203,7 @@ func (h *UserHandler) UpdateEmployee(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *UserHandler) UserLogin(w http.ResponseWriter, r *http.Request) {
-	var req models.PublicUserReq
+	var req PublicUserReq
 	if err := utils.ParseJSONBody(r, &req); err != nil {
 		utils.RespondError(w, http.StatusBadRequest, err, "invalid input")
 		return

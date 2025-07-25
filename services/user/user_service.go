@@ -2,25 +2,26 @@ package userservice
 
 import (
 	"asset/middlewares"
-	"asset/models"
+	"asset/utils"
 	"context"
 	"database/sql"
 	"errors"
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
+	"go.uber.org/zap"
 	"strings"
 )
 
 type UserService interface {
-	ChangeUserRole(ctx context.Context, req models.UpdateUserRoleReq, adminID uuid.UUID) error
+	ChangeUserRole(ctx context.Context, req UpdateUserRoleReq, adminID uuid.UUID) error
 	DeleteUser(ctx context.Context, userID uuid.UUID, managerRole string) error
-	GetEmployeesWithFilters(ctx context.Context, filter models.EmployeeFilter) ([]models.EmployeeResponseModel, error)
-	GetEmployeeTimeline(ctx context.Context, userID uuid.UUID) ([]models.UserTimelineRes, error)
-	PublicRegister(ctx context.Context, req models.PublicUserReq) (uuid.UUID, error)
-	RegisterEmployeeByManager(ctx context.Context, req models.ManagerRegisterReq, managerID uuid.UUID) (uuid.UUID, error)
-	UpdateEmployee(ctx context.Context, req models.UpdateEmployeeReq, managerID uuid.UUID) error
-	GetDashboard(ctx context.Context, userID uuid.UUID) (models.UserDashboardRes, error)
-	UserLogin(ctx context.Context, req models.PublicUserReq) (uuid.UUID, string, string, error)
+	GetEmployeesWithFilters(ctx context.Context, filter EmployeeFilter) ([]EmployeeResponseModel, error)
+	GetEmployeeTimeline(ctx context.Context, userID uuid.UUID) ([]UserTimelineRes, error)
+	PublicRegister(ctx context.Context, req PublicUserReq) (uuid.UUID, error)
+	RegisterEmployeeByManager(ctx context.Context, req ManagerRegisterReq, managerID uuid.UUID) (uuid.UUID, error)
+	UpdateEmployee(ctx context.Context, req UpdateEmployeeReq, managerID uuid.UUID) error
+	GetDashboard(ctx context.Context, userID uuid.UUID) (UserDashboardRes, error)
+	UserLogin(ctx context.Context, req PublicUserReq) (uuid.UUID, string, string, error)
 }
 
 type userService struct {
@@ -32,7 +33,7 @@ func NewUserService(repo UserRepository, db *sqlx.DB) UserService {
 	return &userService{repo: repo, db: db}
 }
 
-func (s *userService) ChangeUserRole(ctx context.Context, req models.UpdateUserRoleReq, adminID uuid.UUID) error {
+func (s *userService) ChangeUserRole(ctx context.Context, req UpdateUserRoleReq, adminID uuid.UUID) error {
 	tx, err := s.db.BeginTxx(ctx, nil)
 	if err != nil {
 		return err
@@ -70,60 +71,84 @@ func (s *userService) DeleteUser(ctx context.Context, userID uuid.UUID, managerR
 	return s.repo.DeleteUserByID(ctx, userID)
 }
 
-func (s *userService) GetEmployeesWithFilters(ctx context.Context, filter models.EmployeeFilter) ([]models.EmployeeResponseModel, error) {
+func (s *userService) GetEmployeesWithFilters(ctx context.Context, filter EmployeeFilter) ([]EmployeeResponseModel, error) {
 	return s.repo.GetFilteredEmployeesWithAssets(ctx, filter)
 }
 
-func (s *userService) GetEmployeeTimeline(ctx context.Context, userID uuid.UUID) ([]models.UserTimelineRes, error) {
+func (s *userService) GetEmployeeTimeline(ctx context.Context, userID uuid.UUID) ([]UserTimelineRes, error) {
 	return s.repo.GetUserAssetTimeline(ctx, userID)
 }
 
-func (s *userService) PublicRegister(ctx context.Context, req models.PublicUserReq) (uuid.UUID, error) {
+func (s *userService) PublicRegister(ctx context.Context, req PublicUserReq) (uuid.UUID, error) {
+	utils.Logger.Info("inside publicregistration service...", zap.String("email", req.Email))
 	tx, err := s.db.BeginTxx(ctx, nil)
 	if err != nil {
+		utils.Logger.Error("Failed to begin transaction", zap.Error(err))
 		return uuid.Nil, err
 	}
 	defer func() {
-		if r := recover(); r != nil || err != nil {
+		if r := recover(); r != nil {
+			utils.Logger.Error("Panic recovered in PublicRegister", zap.Any("recover_info", r))
+			tx.Rollback()
+		} else if err != nil {
+			utils.Logger.Error("Rolling back transaction due to error", zap.Error(err))
 			tx.Rollback()
 		} else {
-			tx.Commit()
+			if commitErr := tx.Commit(); commitErr != nil {
+				utils.Logger.Error("Failed to commit transaction", zap.Error(commitErr))
+			} else {
+				utils.Logger.Info("Transaction committed successfully")
+			}
 		}
 	}()
 
 	splitEmail := strings.Split(req.Email, "@")
 	if len(splitEmail) != 2 || splitEmail[1] != "remotestate.com" {
+		utils.Logger.Error("Invalid email domain", zap.String("input email ::", req.Email), zap.String("Required ::", "firstname.secondname@remotestate.com"))
 		return uuid.Nil, errors.New("only remotestate.com domain is valid")
 	}
+
 	usernameParts := strings.Split(splitEmail[0], ".")
 	if len(usernameParts) != 2 {
+		utils.Logger.Error("Invalid email format for username", zap.String("email", req.Email))
 		return uuid.Nil, errors.New("invalid email format for username")
 	}
 	username := usernameParts[0] + " " + usernameParts[1]
 
+	utils.Logger.Debug("Parsed username from email ", zap.String("username", username))
+
 	exists, err := s.repo.IsUserExists(ctx, tx, req.Email)
 	if err != nil {
+		utils.Logger.Error("Failed to check if user exists", zap.Error(err))
 		return uuid.Nil, err
 	}
 	if exists {
-		return uuid.Nil, errors.New("email already registered")
+		utils.Logger.Warn("user already registered", zap.String("email", req.Email))
+		return uuid.Nil, errors.New("email already registered...")
 	}
 
 	userID, err := s.repo.InsertIntoUser(ctx, tx, username, req.Email)
 	if err != nil {
+		utils.Logger.Error("failed to insert into users table...", zap.Error(err))
 		return uuid.Nil, err
 	}
+	utils.Logger.Info("new user inserted into users table", zap.String("user_id", userID.String()))
 
 	if err = s.repo.InsertIntoUserRole(ctx, tx, userID, "employee", userID); err != nil {
+		utils.Logger.Error("failed to insert user role", zap.Error(err))
 		return uuid.Nil, err
 	}
+	utils.Logger.Debug("assigned user role 'employee'", zap.String("user_id", userID.String()))
+
 	if err = s.repo.InsertIntoUserType(ctx, tx, userID, "full_time", userID); err != nil {
+		utils.Logger.Error("failed to insert user type", zap.Error(err))
 		return uuid.Nil, err
 	}
+	utils.Logger.Debug("assigned user type 'full_time'", zap.String("user_id", userID.String()))
 	return userID, nil
 }
 
-func (s *userService) RegisterEmployeeByManager(ctx context.Context, req models.ManagerRegisterReq, managerID uuid.UUID) (uuid.UUID, error) {
+func (s *userService) RegisterEmployeeByManager(ctx context.Context, req ManagerRegisterReq, managerID uuid.UUID) (uuid.UUID, error) {
 	tx, err := s.db.BeginTxx(ctx, nil)
 	if err != nil {
 		return uuid.Nil, err
@@ -139,15 +164,15 @@ func (s *userService) RegisterEmployeeByManager(ctx context.Context, req models.
 	return s.repo.CreateNewEmployee(ctx, tx, req, managerID)
 }
 
-func (s *userService) UpdateEmployee(ctx context.Context, req models.UpdateEmployeeReq, managerID uuid.UUID) error {
+func (s *userService) UpdateEmployee(ctx context.Context, req UpdateEmployeeReq, managerID uuid.UUID) error {
 	return s.repo.UpdateEmployeeInfo(ctx, req, managerID)
 }
 
-func (s *userService) GetDashboard(ctx context.Context, userID uuid.UUID) (models.UserDashboardRes, error) {
+func (s *userService) GetDashboard(ctx context.Context, userID uuid.UUID) (UserDashboardRes, error) {
 	return s.repo.GetUserDashboardById(ctx, userID)
 }
 
-func (s *userService) UserLogin(ctx context.Context, req models.PublicUserReq) (uuid.UUID, string, string, error) {
+func (s *userService) UserLogin(ctx context.Context, req PublicUserReq) (uuid.UUID, string, string, error) {
 	userID, err := s.repo.GetUserByEmail(ctx, req.Email)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
