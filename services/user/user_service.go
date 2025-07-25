@@ -80,7 +80,7 @@ func (s *userService) GetEmployeeTimeline(ctx context.Context, userID uuid.UUID)
 }
 
 func (s *userService) PublicRegister(ctx context.Context, req PublicUserReq) (uuid.UUID, error) {
-	utils.Logger.Info("inside publicregistration service...", zap.String("email", req.Email))
+	utils.Logger.Info("inside public registration service...", zap.String("email", req.Email))
 	tx, err := s.db.BeginTxx(ctx, nil)
 	if err != nil {
 		utils.Logger.Error("Failed to begin transaction", zap.Error(err))
