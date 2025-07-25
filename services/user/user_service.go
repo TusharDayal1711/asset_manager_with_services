@@ -2,7 +2,7 @@ package userservice
 
 import (
 	"asset/middlewares"
-	"asset/utils"
+	"asset/providers"
 	"context"
 	"database/sql"
 	"errors"
@@ -25,12 +25,13 @@ type UserService interface {
 }
 
 type userService struct {
-	repo UserRepository
-	db   *sqlx.DB
+	repo   UserRepository
+	db     *sqlx.DB
+	logger providers.ZapLoggerProvider
 }
 
-func NewUserService(repo UserRepository, db *sqlx.DB) UserService {
-	return &userService{repo: repo, db: db}
+func NewUserService(repo UserRepository, db *sqlx.DB, logger providers.ZapLoggerProvider) UserService {
+	return &userService{repo: repo, db: db, logger: logger}
 }
 
 func (s *userService) ChangeUserRole(ctx context.Context, req UpdateUserRoleReq, adminID uuid.UUID) error {
@@ -80,71 +81,71 @@ func (s *userService) GetEmployeeTimeline(ctx context.Context, userID uuid.UUID)
 }
 
 func (s *userService) PublicRegister(ctx context.Context, req PublicUserReq) (uuid.UUID, error) {
-	utils.Logger.Info("inside public registration service...", zap.String("email", req.Email))
+	s.logger.GetLogger().Info("inside public registration service...", zap.String("email", req.Email))
 	tx, err := s.db.BeginTxx(ctx, nil)
 	if err != nil {
-		utils.Logger.Error("Failed to begin transaction", zap.Error(err))
+		s.logger.GetLogger().Error("Failed to begin transaction", zap.Error(err))
 		return uuid.Nil, err
 	}
 	defer func() {
 		if r := recover(); r != nil {
-			utils.Logger.Error("Panic recovered in PublicRegister", zap.Any("recover_info", r))
+			s.logger.GetLogger().Error("Panic recovered in PublicRegister", zap.Any("recover_info", r))
 			tx.Rollback()
 		} else if err != nil {
-			utils.Logger.Error("Rolling back transaction due to error", zap.Error(err))
+			s.logger.GetLogger().Error("Rolling back transaction due to error", zap.Error(err))
 			tx.Rollback()
 		} else {
 			if commitErr := tx.Commit(); commitErr != nil {
-				utils.Logger.Error("Failed to commit transaction", zap.Error(commitErr))
+				s.logger.GetLogger().Error("Failed to commit transaction", zap.Error(commitErr))
 			} else {
-				utils.Logger.Info("Transaction committed successfully")
+				s.logger.GetLogger().Info("Transaction committed successfully")
 			}
 		}
 	}()
 
 	splitEmail := strings.Split(req.Email, "@")
 	if len(splitEmail) != 2 || splitEmail[1] != "remotestate.com" {
-		utils.Logger.Error("Invalid email domain", zap.String("input email ::", req.Email), zap.String("Required ::", "firstname.secondname@remotestate.com"))
+		s.logger.GetLogger().Error("Invalid email domain", zap.String("input email ::", req.Email), zap.String("Required ::", "first_name.secondname@remotestate.com"))
 		return uuid.Nil, errors.New("only remotestate.com domain is valid")
 	}
 
 	usernameParts := strings.Split(splitEmail[0], ".")
 	if len(usernameParts) != 2 {
-		utils.Logger.Error("Invalid email format for username", zap.String("email", req.Email))
+		s.logger.GetLogger().Error("Invalid email format for username", zap.String("email", req.Email))
 		return uuid.Nil, errors.New("invalid email format for username")
 	}
 	username := usernameParts[0] + " " + usernameParts[1]
 
-	utils.Logger.Debug("Parsed username from email ", zap.String("username", username))
+	s.logger.GetLogger().Debug("Parsed username from email ", zap.String("username", username))
 
 	exists, err := s.repo.IsUserExists(ctx, tx, req.Email)
 	if err != nil {
-		utils.Logger.Error("Failed to check if user exists", zap.Error(err))
+		s.logger.GetLogger().Error("Failed to check if user exists", zap.Error(err))
 		return uuid.Nil, err
 	}
 	if exists {
-		utils.Logger.Warn("user already registered", zap.String("email", req.Email))
+		s.logger.GetLogger().Warn("user already registered", zap.String("email", req.Email))
 		return uuid.Nil, errors.New("email already registered...")
 	}
 
 	userID, err := s.repo.InsertIntoUser(ctx, tx, username, req.Email)
 	if err != nil {
-		utils.Logger.Error("failed to insert into users table...", zap.Error(err))
+		s.logger.GetLogger().Error("failed to insert into users table...", zap.Error(err))
 		return uuid.Nil, err
 	}
-	utils.Logger.Info("new user inserted into users table", zap.String("user_id", userID.String()))
+	s.logger.GetLogger().Info("new user inserted into users table", zap.String("user_id", userID.String()))
 
 	if err = s.repo.InsertIntoUserRole(ctx, tx, userID, "employee", userID); err != nil {
-		utils.Logger.Error("failed to insert user role", zap.Error(err))
+		s.logger.GetLogger().Error("failed to insert user role", zap.Error(err))
 		return uuid.Nil, err
 	}
-	utils.Logger.Debug("assigned user role 'employee'", zap.String("user_id", userID.String()))
+	s.logger.GetLogger().Debug("assigned user role 'employee'", zap.String("user_id", userID.String()))
 
 	if err = s.repo.InsertIntoUserType(ctx, tx, userID, "full_time", userID); err != nil {
-		utils.Logger.Error("failed to insert user type", zap.Error(err))
+		s.logger.GetLogger().Error("failed to insert user type", zap.Error(err))
 		return uuid.Nil, err
 	}
-	utils.Logger.Debug("assigned user type 'full_time'", zap.String("user_id", userID.String()))
+	s.logger.GetLogger().Debug("assigned user type 'full_time'", zap.String("user_id", userID.String()))
 	return userID, nil
 }
 

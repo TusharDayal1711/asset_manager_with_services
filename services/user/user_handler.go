@@ -16,12 +16,14 @@ import (
 type UserHandler struct {
 	Service        UserService
 	AuthMiddleware providers.AuthMiddlewareService
+	Logger         providers.ZapLoggerProvider
 }
 
-func NewUserHandler(service UserService, auth providers.AuthMiddlewareService) *UserHandler {
+func NewUserHandler(service UserService, auth providers.AuthMiddlewareService, log providers.ZapLoggerProvider) *UserHandler {
 	return &UserHandler{
 		Service:        service,
 		AuthMiddleware: auth,
+		Logger:         log,
 	}
 }
 
@@ -130,8 +132,10 @@ func (h *UserHandler) GetEmployeeTimeline(w http.ResponseWriter, r *http.Request
 
 func (h *UserHandler) PublicRegister(w http.ResponseWriter, r *http.Request) {
 	var req PublicUserReq
+	h.Logger.GetLogger().Info("PublicRegister...", zap.String("request body", req.Email))
 	if err := utils.ParseJSONBody(r, &req); err != nil {
-		utils.Logger.Error("Failed to parse request body", zap.Error(err))
+		//utils.Logger("failed to parse request body", zap.Error(err))
+		h.Logger.GetLogger().Error("error parsing request", zap.Error(err))
 		utils.RespondError(w, http.StatusBadRequest, err, "invalid input")
 		return
 	}

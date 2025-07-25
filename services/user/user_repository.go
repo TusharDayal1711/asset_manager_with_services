@@ -1,7 +1,7 @@
 package userservice
 
 import (
-	"asset/utils"
+	"asset/providers"
 	"context"
 	"database/sql"
 	"errors"
@@ -34,11 +34,12 @@ type UserRepository interface {
 }
 
 type PostgresUserRepository struct {
-	DB *sqlx.DB
+	DB     *sqlx.DB
+	Logger providers.ZapLoggerProvider
 }
 
-func NewUserRepository(db *sqlx.DB) UserRepository {
-	return &PostgresUserRepository{DB: db}
+func NewUserRepository(db *sqlx.DB, log providers.ZapLoggerProvider) UserRepository {
+	return &PostgresUserRepository{DB: db, Logger: log}
 }
 
 func (r *PostgresUserRepository) DeleteUserByID(ctx context.Context, userID uuid.UUID) (err error) {
@@ -368,7 +369,7 @@ func (r *PostgresUserRepository) ArchiveUserRoles(ctx context.Context, tx *sqlx.
 }
 
 func (r *PostgresUserRepository) IsUserExists(ctx context.Context, tx *sqlx.Tx, email string) (bool, error) {
-	utils.Logger.Info("inside IsUSerExits...", zap.String("incoming email:", email))
+	r.Logger.GetLogger().Info("inside IsUSerExits...", zap.String("incoming email:", email))
 	var id uuid.UUID
 	err := tx.QueryRowContext(ctx, `
 		SELECT id FROM users 
@@ -378,15 +379,15 @@ func (r *PostgresUserRepository) IsUserExists(ctx context.Context, tx *sqlx.Tx, 
 		return false, nil
 	}
 	if err != nil {
-		utils.Logger.Error("failed to check if user exists", zap.Error(err))
+		r.Logger.GetLogger().Error("failed to check if user exists", zap.Error(err))
 		return false, fmt.Errorf("failed to check existing user: %w", err)
 	}
-	utils.Logger.Info("user exists, returning true", zap.String("user", email))
+	r.Logger.GetLogger().Info("user exists, returning true", zap.String("user", email))
 	return true, nil
 }
 
 func (r *PostgresUserRepository) InsertIntoUser(ctx context.Context, tx *sqlx.Tx, username, email string) (uuid.UUID, error) {
-	utils.Logger.Info("inside InsertIntoUser, with values ::", zap.String("email:", email), zap.String("username:", username))
+	r.Logger.GetLogger().Info("inside InsertIntoUser, with values ::", zap.String("email:", email), zap.String("username:", username))
 	var id uuid.UUID
 	err := tx.GetContext(ctx, &id, `
 		INSERT INTO users (username, email)
@@ -394,7 +395,7 @@ func (r *PostgresUserRepository) InsertIntoUser(ctx context.Context, tx *sqlx.Tx
 		RETURNING id
 	`, username, email)
 	if err != nil {
-		utils.Logger.Error("failed to insert into users", zap.Error(err))
+		r.Logger.GetLogger().Error("failed to insert into users", zap.Error(err))
 		return uuid.Nil, fmt.Errorf("failed to insert user: %w", err)
 	}
 
@@ -402,7 +403,7 @@ func (r *PostgresUserRepository) InsertIntoUser(ctx context.Context, tx *sqlx.Tx
 		UPDATE users SET created_by = $1 WHERE id = $1
 	`, id)
 	if err != nil {
-		utils.Logger.Error("failed to insert into users", zap.Error(err))
+		r.Logger.GetLogger().Error("failed to insert into users", zap.Error(err))
 		return uuid.Nil, fmt.Errorf("failed to update created_by: %w", err)
 	}
 	return id, nil
