@@ -4,6 +4,7 @@ import (
 	"asset/providers"
 	"asset/providers/configProvider"
 	"asset/providers/databaseProvider"
+	"asset/providers/loggerProvider"
 	"asset/providers/middlewareprovider"
 	"asset/services/asset"
 	"asset/services/user"
@@ -21,25 +22,31 @@ type Server struct {
 	UserHandler  *userservice.UserHandler
 	AssetHandler *assetservice.AssetHandler
 	httpServer   *http.Server
+	Logger       providers.ZapLoggerProvider
 }
 
-func SrvInit() *Server {
+func ServerInit() *Server {
 	cfg := configprovider.NewConfigProvider()
 	cfg.LoadEnv()
+
+	//zap logger
+	logs := loggerProvider.NewLogProvider()
+	logs.InitLogger()
+	logs.GetLogger().Info("inside serverInit")
 
 	db := databaseProvider.NewDBProvider(cfg.GetDatabaseString())
 	middleware := middlewareprovider.NewAuthMiddlewareService(db.DB())
 
-	// repositories
-	userRepo := userservice.NewUserRepository(db.DB())
+	//repositories
+	userRepo := userservice.NewUserRepository(db.DB(), logs)
 	assetRepo := assetservice.NewAssetRepository(db.DB())
 
-	// services
-	userService := userservice.NewUserService(userRepo, db.DB())
+	//services
+	userService := userservice.NewUserService(userRepo, db.DB(), logs)
 	assetService := assetservice.NewAssetService(assetRepo, db.DB())
 
-	// handlers
-	userHandler := userservice.NewUserHandler(userService, middleware)
+	//handlers
+	userHandler := userservice.NewUserHandler(userService, middleware, logs)
 	assetHandler := assetservice.NewAssetHandler(assetService, middleware)
 
 	return &Server{
@@ -48,6 +55,7 @@ func SrvInit() *Server {
 		Middleware:   middleware,
 		UserHandler:  userHandler,
 		AssetHandler: assetHandler,
+		Logger:       logs,
 	}
 }
 
@@ -70,9 +78,10 @@ func (s *Server) Start() {
 
 func (s *Server) Stop() {
 	fmt.Println("shutting down server...")
+	s.Logger.GetLogger().Info("shutting down server...")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-
+	s.Logger.SyncLogger()
 	if err := s.httpServer.Shutdown(ctx); err != nil {
 		log.Printf("error shutting down server: %v", err)
 	}
