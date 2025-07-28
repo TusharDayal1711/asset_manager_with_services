@@ -10,7 +10,7 @@ import (
 func (srv *Server) InjectRoutes() *chi.Mux {
 	r := chi.NewRouter()
 
-	r.Use(middleware.Logger) // Optional: helpful for dev/debug
+	r.Use(middleware.Logger)
 	r.Get("/test", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("connection established..."))
 	})
@@ -19,6 +19,8 @@ func (srv *Server) InjectRoutes() *chi.Mux {
 	r.Route("/api", func(api chi.Router) {
 		api.Post("/user/register", srv.UserHandler.PublicRegister)
 		api.Post("/user/login", srv.UserHandler.UserLogin)
+		api.Post("/user/loginV2", srv.UserHandler.GoogleAuth)
+		//api.Post("/createadmin", srv.UserHandler.CreateAdmin)
 
 		//protected
 		api.Group(func(protected chi.Router) {
