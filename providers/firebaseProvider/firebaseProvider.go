@@ -1,9 +1,10 @@
 package firebaseprovider
 
 import (
+	"asset/providers"
 	"context"
-	firebase "firebase.google.com/go"
-	firebaseauth "firebase.google.com/go/auth"
+	firebase "firebase.google.com/go/v4"
+	firebaseauth "firebase.google.com/go/v4/auth"
 	"google.golang.org/api/option"
 )
 
@@ -11,7 +12,7 @@ type firebaseService struct {
 	client *firebaseauth.Client
 }
 
-func NewFirebaseProvider(serviceAccountJSON []byte) (FirebaseProvider, error) {
+func NewFirebaseProvider(serviceAccountJSON []byte) (providers.FirebaseProvider, error) {
 	opt := option.WithCredentialsJSON(serviceAccountJSON)
 	app, err := firebase.NewApp(context.Background(), nil, opt)
 	if err != nil {

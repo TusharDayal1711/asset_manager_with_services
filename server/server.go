@@ -38,7 +38,7 @@ func ServerInit() *Server {
 	logs.GetLogger().Info("inside serverInit")
 
 	//firebase
-	serviceAccountJSON, err := os.ReadFile("providers/firebaseProvider/assetmanagement01-3b299-firebase-adminsdk-fbsvc-34cacf90ad.json")
+	serviceAccountJSON, err := os.ReadFile("assetmanagement01-3b299-firebase-adminsdk-fbsvc-34cacf90ad.json")
 	if err != nil {
 		log.Fatalf("failed to read firebase credentials: %v", err)
 	}

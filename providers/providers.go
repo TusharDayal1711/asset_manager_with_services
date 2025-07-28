@@ -2,6 +2,8 @@ package providers
 
 import (
 	"asset/models"
+	"context"
+	firebaseauth "firebase.google.com/go/v4/auth"
 	"github.com/jmoiron/sqlx"
 	"go.uber.org/zap"
 	"net/http"
@@ -28,4 +30,9 @@ type ZapLoggerProvider interface {
 	InitLogger()
 	SyncLogger()
 	GetLogger() *zap.Logger
+}
+
+type FirebaseProvider interface {
+	VerifyIDToken(ctx context.Context, idToken string) (*firebaseauth.Token, error)
+	GetUserByUID(ctx context.Context, uid string) (*firebaseauth.UserRecord, error)
 }
