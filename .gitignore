@@ -18,5 +18,6 @@ docker-compose.yaml
 
 #ignore Firebase credentials
 assetmanagement01-3b299-firebase-adminsdk-fbsvc-34cacf90ad.json
+/providers/firebaseProvider/assetmanagement01-3b299-firebase-adminsdk-fbsvc-34cacf90ad.json
 
 
