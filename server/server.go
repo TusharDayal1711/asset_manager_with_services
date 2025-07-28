@@ -4,6 +4,7 @@ import (
 	"asset/providers"
 	"asset/providers/configProvider"
 	"asset/providers/databaseProvider"
+	firebaseprovider "asset/providers/firebaseProvider"
 	"asset/providers/loggerProvider"
 	"asset/providers/middlewareprovider"
 	"asset/services/asset"
@@ -12,6 +13,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"time"
 )
 
@@ -23,6 +25,7 @@ type Server struct {
 	AssetHandler *assetservice.AssetHandler
 	httpServer   *http.Server
 	Logger       providers.ZapLoggerProvider
+	Firebase     providers.FirebaseProvider
 }
 
 func ServerInit() *Server {
@@ -34,11 +37,21 @@ func ServerInit() *Server {
 	logs.InitLogger()
 	logs.GetLogger().Info("inside serverInit")
 
+	//firebase
+	serviceAccountJSON, err := os.ReadFile("providers/firebaseProvider/assetmanagement01-3b299-firebase-adminsdk-fbsvc-34cacf90ad.json")
+	if err != nil {
+		log.Fatalf("failed to read firebase credentials: %v", err)
+	}
+	firebase, err := firebaseprovider.NewFirebaseProvider(serviceAccountJSON)
+	if err != nil {
+		log.Fatalf("failed to initialize firebase: %v", err)
+	}
+
 	db := databaseProvider.NewDBProvider(cfg.GetDatabaseString())
 	middleware := middlewareprovider.NewAuthMiddlewareService(db.DB())
 
 	//repositories
-	userRepo := userservice.NewUserRepository(db.DB(), logs)
+	userRepo := userservice.NewUserRepository(db.DB(), logs, firebase)
 	assetRepo := assetservice.NewAssetRepository(db.DB())
 
 	//services
