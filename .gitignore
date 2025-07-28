@@ -1,0 +1,22 @@
+# GoLand project settings
+.idea/
+
+# Environment variables
+.env
+
+# PostgreSQL volume data
+pgdata/
+
+# os pecific files
+.DS_Store
+Thumbs.db
+
+# Docker compose file
+docker-compose.yaml
+
+.json
+
+#ignore Firebase credentials
+assetmanagement01-3b299-firebase-adminsdk-fbsvc-34cacf90ad.json
+
+
