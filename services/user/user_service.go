@@ -6,9 +6,11 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
 	"go.uber.org/zap"
+	"log"
 	"strings"
 )
 
@@ -22,6 +24,8 @@ type UserService interface {
 	UpdateEmployee(ctx context.Context, req UpdateEmployeeReq, managerID uuid.UUID) error
 	GetDashboard(ctx context.Context, userID uuid.UUID) (UserDashboardRes, error)
 	UserLogin(ctx context.Context, req PublicUserReq) (uuid.UUID, string, string, error)
+	GoogleAuth(ctx context.Context, idToken string) (uuid.UUID, string, string, error)
+	CreateFirstAdmin() bool
 }
 
 type userService struct {
@@ -35,168 +39,377 @@ func NewUserService(repo UserRepository, db *sqlx.DB, logger providers.ZapLogger
 }
 
 func (s *userService) ChangeUserRole(ctx context.Context, req UpdateUserRoleReq, adminID uuid.UUID) error {
+	s.logger.GetLogger().Info("change user role", zap.String("targetUserID", req.UserID), zap.String("newRole", req.Role), zap.String("adminID", adminID.String()))
 	tx, err := s.db.BeginTxx(ctx, nil)
 	if err != nil {
+		s.logger.GetLogger().Error("failed to begin transaction for ChangeUserRole", zap.Error(err))
 		return err
 	}
 	defer func() {
-		if r := recover(); r != nil || err != nil {
+		if r := recover(); r != nil {
+			s.logger.GetLogger().Error("panic recovered during ChangeUserRole transaction", zap.Any("recover_info", r))
+			tx.Rollback()
+		} else if err != nil {
+			s.logger.GetLogger().Error("rolling back transaction for ChangeUserRole", zap.Error(err))
 			tx.Rollback()
 		} else {
-			tx.Commit()
+			if commitErr := tx.Commit(); commitErr != nil {
+				s.logger.GetLogger().Error("failed to commit transaction for ChangeUserRole", zap.Error(commitErr))
+			} else {
+				s.logger.GetLogger().Info("transaction committed successfully for ChangeUserRole")
+			}
 		}
 	}()
 
 	userUUID, err := uuid.Parse(req.UserID)
 	if err != nil {
+		s.logger.GetLogger().Error("failed to parse userID in ChangeUserRole", zap.String("userID", req.UserID), zap.Error(err))
 		return err
 	}
 
 	err = s.repo.UpdateUserRole(ctx, tx, userUUID, req.Role, adminID)
-	if err != nil && strings.Contains(err.Error(), "already has the role") {
-		return errors.New("user already has this role")
+	if err != nil {
+		if strings.Contains(err.Error(), "already has the role") {
+			s.logger.GetLogger().Warn("user already has the requested role", zap.String("userID", req.UserID), zap.String("role", req.Role))
+			return errors.New("user already has this role")
+		}
+		s.logger.GetLogger().Error("Failed to update user role in repository", zap.String("userID", req.UserID), zap.Error(err))
+		return err
 	}
-	return err
+	s.logger.GetLogger().Info("User role updated successfully", zap.String("userID", req.UserID), zap.String("newRole", req.Role))
+	return nil
 }
 
 func (s *userService) DeleteUser(ctx context.Context, userID uuid.UUID, managerRole string) error {
+	s.logger.GetLogger().Info("inside delete user", zap.String("userID", userID.String()), zap.String("managerRole", managerRole))
 	userRole, err := s.repo.GetUserRoleById(ctx, userID)
 	if err != nil {
+		s.logger.GetLogger().Error("failed to get user role by ID for deletion", zap.String("userID", userID.String()), zap.Error(err))
 		return err
 	}
+	s.logger.GetLogger().Debug("retrieved user role for deletion target", zap.String("userID", userID.String()), zap.String("userRole", userRole))
 
 	if managerRole != "admin" && (userRole == "admin" || userRole == "asset_manager" || userRole == "inventory_manager") {
+		s.logger.GetLogger().Warn("unauthorized attempt to delete privileged user role", zap.String("managerRole", managerRole), zap.String("targetUserRole", userRole))
 		return errors.New("only admin can delete admin or manager roles")
 	}
 
-	return s.repo.DeleteUserByID(ctx, userID)
+	err = s.repo.DeleteUserByID(ctx, userID)
+	if err != nil {
+		s.logger.GetLogger().Error("failed to delete user by ID", zap.String("userID", userID.String()), zap.Error(err))
+		return err
+	}
+	s.logger.GetLogger().Info("user deleted successfully", zap.String("userID", userID.String()))
+	return nil
 }
 
 func (s *userService) GetEmployeesWithFilters(ctx context.Context, filter EmployeeFilter) ([]EmployeeResponseModel, error) {
-	return s.repo.GetFilteredEmployeesWithAssets(ctx, filter)
+	s.logger.GetLogger().Info("fetching employees with filters", zap.Any("filter", filter))
+	employees, err := s.repo.GetFilteredEmployeesWithAssets(ctx, filter)
+	if err != nil {
+		s.logger.GetLogger().Error("failed to get filtered employees with assets", zap.Error(err))
+		return nil, err
+	}
+	s.logger.GetLogger().Info("successfully fetched employees with filters", zap.Int("count", len(employees)))
+	return employees, nil
 }
 
 func (s *userService) GetEmployeeTimeline(ctx context.Context, userID uuid.UUID) ([]UserTimelineRes, error) {
-	return s.repo.GetUserAssetTimeline(ctx, userID)
+	s.logger.GetLogger().Info("fetching employee timeline", zap.String("userID", userID.String()))
+	timeline, err := s.repo.GetUserAssetTimeline(ctx, userID)
+	if err != nil {
+		s.logger.GetLogger().Error("failed to get user asset timeline", zap.String("userID", userID.String()), zap.Error(err))
+		return nil, err
+	}
+	s.logger.GetLogger().Info("successfully fetched employee timeline", zap.String("userID", userID.String()), zap.Int("timelineEvents", len(timeline)))
+	return timeline, nil
 }
 
 func (s *userService) PublicRegister(ctx context.Context, req PublicUserReq) (uuid.UUID, error) {
-	s.logger.GetLogger().Info("inside public registration service...", zap.String("email", req.Email))
+	s.logger.GetLogger().Info("starting public registration service", zap.String("email", req.Email))
 	tx, err := s.db.BeginTxx(ctx, nil)
 	if err != nil {
-		s.logger.GetLogger().Error("Failed to begin transaction", zap.Error(err))
+		s.logger.GetLogger().Error("failed to begin transaction for PublicRegister", zap.Error(err))
 		return uuid.Nil, err
 	}
 	defer func() {
 		if r := recover(); r != nil {
-			s.logger.GetLogger().Error("Panic recovered in PublicRegister", zap.Any("recover_info", r))
+			s.logger.GetLogger().Error("panic recovered in PublicRegister", zap.Any("recover_info", r))
 			tx.Rollback()
 		} else if err != nil {
-			s.logger.GetLogger().Error("Rolling back transaction due to error", zap.Error(err))
+			s.logger.GetLogger().Error("rolling back transaction for PublicRegister due to error", zap.Error(err))
 			tx.Rollback()
 		} else {
 			if commitErr := tx.Commit(); commitErr != nil {
-				s.logger.GetLogger().Error("Failed to commit transaction", zap.Error(commitErr))
+				s.logger.GetLogger().Error("failed to commit transaction for PublicRegister", zap.Error(commitErr))
 			} else {
-				s.logger.GetLogger().Info("Transaction committed successfully")
+				s.logger.GetLogger().Info("transaction committed successfully for PublicRegister")
 			}
 		}
 	}()
 
 	splitEmail := strings.Split(req.Email, "@")
 	if len(splitEmail) != 2 || splitEmail[1] != "remotestate.com" {
-		s.logger.GetLogger().Error("Invalid email domain", zap.String("input email ::", req.Email), zap.String("Required ::", "first_name.secondname@remotestate.com"))
+		s.logger.GetLogger().Warn("Invalid email domain for public registration", zap.String("email", req.Email))
 		return uuid.Nil, errors.New("only remotestate.com domain is valid")
 	}
 
 	usernameParts := strings.Split(splitEmail[0], ".")
-	if len(usernameParts) != 2 {
-		s.logger.GetLogger().Error("Invalid email format for username", zap.String("email", req.Email))
+	if len(usernameParts) != 2 || usernameParts[0] == "" || usernameParts[1] == "" {
+		s.logger.GetLogger().Warn("Invalid email format for username extraction in PublicRegister", zap.String("email", req.Email))
 		return uuid.Nil, errors.New("invalid email format for username")
 	}
 	username := usernameParts[0] + " " + usernameParts[1]
 
-	s.logger.GetLogger().Debug("Parsed username from email ", zap.String("username", username))
+	s.logger.GetLogger().Debug("Parsed username from email", zap.String("username", username))
 
 	exists, err := s.repo.IsUserExists(ctx, tx, req.Email)
 	if err != nil {
-		s.logger.GetLogger().Error("Failed to check if user exists", zap.Error(err))
+		s.logger.GetLogger().Error("Failed to check if user exists in PublicRegister", zap.Error(err))
 		return uuid.Nil, err
 	}
 	if exists {
-		s.logger.GetLogger().Warn("user already registered", zap.String("email", req.Email))
+		s.logger.GetLogger().Warn("User already registered during public registration attempt", zap.String("email", req.Email))
 		return uuid.Nil, errors.New("email already registered...")
 	}
 
 	userID, err := s.repo.InsertIntoUser(ctx, tx, username, req.Email)
 	if err != nil {
-		s.logger.GetLogger().Error("failed to insert into users table...", zap.Error(err))
+		s.logger.GetLogger().Error("Failed to insert into users table during PublicRegister", zap.Error(err))
 		return uuid.Nil, err
 	}
-	s.logger.GetLogger().Info("new user inserted into users table", zap.String("user_id", userID.String()))
+	s.logger.GetLogger().Info("New user inserted into users table", zap.String("userID", userID.String()))
 
 	if err = s.repo.InsertIntoUserRole(ctx, tx, userID, "employee", userID); err != nil {
-		s.logger.GetLogger().Error("failed to insert user role", zap.Error(err))
+		s.logger.GetLogger().Error("Failed to insert user role during PublicRegister", zap.Error(err), zap.String("userID", userID.String()))
 		return uuid.Nil, err
 	}
-	s.logger.GetLogger().Debug("assigned user role 'employee'", zap.String("user_id", userID.String()))
+	s.logger.GetLogger().Debug("Assigned user role 'employee'", zap.String("userID", userID.String()))
 
 	if err = s.repo.InsertIntoUserType(ctx, tx, userID, "full_time", userID); err != nil {
-		s.logger.GetLogger().Error("failed to insert user type", zap.Error(err))
+		s.logger.GetLogger().Error("Failed to insert user type during PublicRegister", zap.Error(err), zap.String("userID", userID.String()))
 		return uuid.Nil, err
 	}
-	s.logger.GetLogger().Debug("assigned user type 'full_time'", zap.String("user_id", userID.String()))
+	s.logger.GetLogger().Debug("Assigned user type 'full_time'", zap.String("userID", userID.String()))
+	s.logger.GetLogger().Info("Public registration completed successfully", zap.String("userID", userID.String()))
 	return userID, nil
 }
 
 func (s *userService) RegisterEmployeeByManager(ctx context.Context, req ManagerRegisterReq, managerID uuid.UUID) (uuid.UUID, error) {
+	s.logger.GetLogger().Info("Starting employee registration by manager", zap.String("managerID", managerID.String()), zap.String("employeeEmail", req.Email))
 	tx, err := s.db.BeginTxx(ctx, nil)
 	if err != nil {
+		s.logger.GetLogger().Error("Failed to begin transaction for RegisterEmployeeByManager", zap.Error(err))
 		return uuid.Nil, err
 	}
 	defer func() {
-		if r := recover(); r != nil || err != nil {
+		if r := recover(); r != nil {
+			s.logger.GetLogger().Error("Panic recovered during RegisterEmployeeByManager transaction", zap.Any("recover_info", r))
+			tx.Rollback()
+		} else if err != nil {
+			s.logger.GetLogger().Error("Rolling back transaction for RegisterEmployeeByManager due to error", zap.Error(err))
+			tx.Rollback()
+		} else {
+			if commitErr := tx.Commit(); commitErr != nil {
+				s.logger.GetLogger().Error("Failed to commit transaction for RegisterEmployeeByManager", zap.Error(commitErr))
+			} else {
+				s.logger.GetLogger().Info("Transaction committed successfully for RegisterEmployeeByManager")
+			}
+		}
+	}()
+
+	userID, err := s.repo.CreateNewEmployee(ctx, tx, req, managerID)
+	if err != nil {
+		s.logger.GetLogger().Error("Failed to create new employee in repository", zap.Error(err), zap.String("managerID", managerID.String()))
+		return uuid.Nil, err
+	}
+	s.logger.GetLogger().Info("Employee registered successfully by manager", zap.String("managerID", managerID.String()), zap.String("employeeID", userID.String()))
+	return userID, nil
+}
+
+func (s *userService) UpdateEmployee(ctx context.Context, req UpdateEmployeeReq, managerID uuid.UUID) error {
+	s.logger.GetLogger().Info("Attempting to update employee information")
+	err := s.repo.UpdateEmployeeInfo(ctx, req, managerID)
+	if err != nil {
+		s.logger.GetLogger().Error("failed to update employee information in repository")
+		return err
+	}
+	s.logger.GetLogger().Info("employee information updated successfully")
+	return nil
+}
+
+func (s *userService) GetDashboard(ctx context.Context, userID uuid.UUID) (UserDashboardRes, error) {
+	s.logger.GetLogger().Info("Fetching user dashboard data", zap.String("userID", userID.String()))
+	dashboard, err := s.repo.GetUserDashboardById(ctx, userID)
+	if err != nil {
+		s.logger.GetLogger().Error("Failed to get user dashboard by ID", zap.String("userID", userID.String()), zap.Error(err))
+		return UserDashboardRes{}, err
+	}
+	s.logger.GetLogger().Info("Successfully fetched user dashboard data", zap.String("userID", userID.String()))
+	return dashboard, nil
+}
+
+func (s *userService) UserLogin(ctx context.Context, req PublicUserReq) (uuid.UUID, string, string, error) {
+	s.logger.GetLogger().Info("Attempting user login", zap.String("email", req.Email))
+	userID, err := s.repo.GetUserByEmail(ctx, req.Email)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			s.logger.GetLogger().Warn("Login failed: User not found for email", zap.String("email", req.Email))
+			return uuid.Nil, "", "", errors.New("invalid email")
+		}
+		s.logger.GetLogger().Error("Failed to get user by email during login", zap.String("email", req.Email), zap.Error(err))
+		return uuid.Nil, "", "", err
+	}
+	s.logger.GetLogger().Debug("User found for login", zap.String("userID", userID.String()))
+
+	userRole, err := s.repo.GetUserRoleById(ctx, userID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) { // This case might indicate an inconsistency, user exists but no role
+			s.logger.GetLogger().Error("Login failed: User exists but no role found", zap.String("userID", userID.String()), zap.Error(err))
+			return uuid.Nil, "", "", errors.New("user role not found")
+		}
+		s.logger.GetLogger().Error("Failed to get user role by ID during login", zap.String("userID", userID.String()), zap.Error(err))
+		return uuid.Nil, "", "", err
+	}
+	s.logger.GetLogger().Debug("User role retrieved for login", zap.String("userID", userID.String()), zap.String("role", userRole))
+
+	accessToken, err := middlewares.GenerateJWT(userID.String(), []string{userRole})
+	if err != nil {
+		s.logger.GetLogger().Error("Failed to generate access token during login", zap.String("userID", userID.String()), zap.Error(err))
+		return uuid.Nil, "", "", err
+	}
+	refreshToken, err := middlewares.GenerateRefreshToken(userID.String())
+	if err != nil {
+		s.logger.GetLogger().Error("Failed to generate refresh token during login", zap.String("userID", userID.String()), zap.Error(err))
+		return uuid.Nil, "", "", err
+	}
+	s.logger.GetLogger().Info("User login successful, tokens generated", zap.String("userID", userID.String()))
+	return userID, accessToken, refreshToken, nil
+}
+
+func (s *userService) GoogleAuth(ctx context.Context, idToken string) (uuid.UUID, string, string, error) {
+	s.logger.GetLogger().Info("Starting Google authentication process")
+
+	token, err := s.repo.GetFirebase().VerifyIDToken(ctx, idToken)
+	if err != nil {
+		s.logger.GetLogger().Error("Invalid ID token received during GoogleAuth", zap.Error(err))
+		return uuid.Nil, "", "", fmt.Errorf("invalid id token: %w", err)
+	}
+	s.logger.GetLogger().Debug("firebase ID token verified successfully", zap.String("UID", token.UID))
+
+	userRecord, err := s.repo.GetFirebase().GetUserByUID(ctx, token.UID)
+	if err != nil {
+		s.logger.GetLogger().Error("failed to get user record from Firebase", zap.String("UID", token.UID), zap.Error(err))
+		return uuid.Nil, "", "", fmt.Errorf("failed to get user info from firebase: %w", err)
+	}
+	s.logger.GetLogger().Debug("User record retrieved from Firebase", zap.String("email", userRecord.Email), zap.String("displayName", userRecord.DisplayName))
+
+	email := userRecord.Email
+	if email == "" {
+		s.logger.GetLogger().Error("email not found in Firebase user record", zap.String("UID", token.UID))
+		return uuid.Nil, "", "", fmt.Errorf("email not found in firebase database")
+	}
+
+	userID, err := s.repo.GetUserByEmail(ctx, email)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			s.logger.GetLogger().Info("User not found in PostgreSQL, creating new user account", zap.String("email", email))
+			name := userRecord.DisplayName
+			userID, err = s.repo.CreateFirebaseUser(ctx, name, email)
+			if err != nil {
+				s.logger.GetLogger().Error("Failed to register new Firebase user in PostgreSQL", zap.String("email", email), zap.Error(err))
+				return uuid.Nil, "", "", fmt.Errorf("failed to register user: %w", err)
+			}
+			s.logger.GetLogger().Info("new user created successfully via Google Auth", zap.String("userID", userID.String()))
+		} else {
+			s.logger.GetLogger().Error("failed to get user by email from PostgreSQL during GoogleAuth", zap.String("email", email), zap.Error(err))
+			return uuid.Nil, "", "", err
+		}
+	} else {
+		s.logger.GetLogger().Info("existing user found in PostgreSQL for Google Auth", zap.String("userID", userID.String()))
+	}
+
+	role, err := s.repo.GetUserRoleById(ctx, userID)
+	if err != nil {
+		s.logger.GetLogger().Error("failed to get user role from user_roles table during GoogleAuth", zap.String("userID", userID.String()), zap.Error(err))
+		return uuid.Nil, "", "", fmt.Errorf("failed to get role: %w", err)
+	}
+	s.logger.GetLogger().Debug("user role retrieved for Google Auth", zap.String("userID", userID.String()), zap.String("role", role))
+
+	accessToken, err := middlewares.GenerateJWT(userID.String(), []string{role})
+	if err != nil {
+		s.logger.GetLogger().Error("failed to generate access token for GoogleAuth", zap.String("userID", userID.String()), zap.Error(err))
+		return uuid.Nil, "", "", err
+	}
+	s.logger.GetLogger().Debug("access token generated for GoogleAuth", zap.String("userID", userID.String()))
+
+	refreshToken, err := middlewares.GenerateRefreshToken(userID.String())
+	if err != nil {
+		s.logger.GetLogger().Error("failed to generate refresh token for GoogleAuth", zap.String("userID", userID.String()), zap.Error(err))
+		return uuid.Nil, "", "", err
+	}
+	s.logger.GetLogger().Info("google based authentication completed successfully", zap.String("userID", userID.String()))
+	return userID, accessToken, refreshToken, nil
+}
+
+func (s *userService) CreateFirstAdmin() bool {
+	const adminEmail = "systemadmin@remotestate.com"
+	const adminUsername = "System Admin"
+	const Role = "admin"
+	const Type = "full_time"
+
+	var isExist uuid.UUID
+	err := s.db.Get(&isExist, `
+		SELECT id FROM users 
+		WHERE email = $1 AND archived_at IS NULL
+	`, adminEmail)
+	if err == nil {
+		log.Println("user id already exist", isExist)
+		return false
+	}
+
+	tx, err := s.db.Beginx()
+	if err != nil {
+		log.Println("transaction failed", err)
+		return false
+	}
+
+	defer func() {
+		if p := recover(); p != nil || err != nil {
 			tx.Rollback()
 		} else {
 			tx.Commit()
 		}
 	}()
 
-	return s.repo.CreateNewEmployee(ctx, tx, req, managerID)
-}
-
-func (s *userService) UpdateEmployee(ctx context.Context, req UpdateEmployeeReq, managerID uuid.UUID) error {
-	return s.repo.UpdateEmployeeInfo(ctx, req, managerID)
-}
-
-func (s *userService) GetDashboard(ctx context.Context, userID uuid.UUID) (UserDashboardRes, error) {
-	return s.repo.GetUserDashboardById(ctx, userID)
-}
-
-func (s *userService) UserLogin(ctx context.Context, req PublicUserReq) (uuid.UUID, string, string, error) {
-	userID, err := s.repo.GetUserByEmail(ctx, req.Email)
+	var adminID uuid.UUID
+	err = tx.Get(&adminID, `
+		INSERT INTO users (username, email)
+		VALUES ($1, $2)
+		RETURNING id
+	`, adminUsername, adminEmail)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return uuid.Nil, "", "", errors.New("invalid email")
-		}
-		return uuid.Nil, "", "", err
+		log.Println("failed to create new admin", err)
+		return false
 	}
 
-	userRole, err := s.repo.GetUserRoleById(ctx, userID)
+	_, err = tx.Exec(`
+		INSERT INTO user_roles (role, user_id, created_by)
+		VALUES ($1, $2, $2)
+	`, Role, adminID)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return uuid.Nil, "", "", errors.New("invalid email")
-		}
-		return uuid.Nil, "", "", err
+		log.Println("failed to assign role", err)
+		return false
 	}
 
-	accessToken, err := middlewares.GenerateJWT(userID.String(), []string{userRole})
+	_, err = tx.Exec(`
+		INSERT INTO user_type (type, user_id, created_by)
+		VALUES ($1, $2, $2)
+	`, Type, adminID)
 	if err != nil {
-		return uuid.Nil, "", "", err
+		log.Println("failed to assign user type", err)
+		return false
 	}
-	refreshToken, err := middlewares.GenerateRefreshToken(userID.String())
-	if err != nil {
-		return uuid.Nil, "", "", err
-	}
-	return userID, accessToken, refreshToken, nil
+	log.Println("admin created", adminID)
+	return true
 }
