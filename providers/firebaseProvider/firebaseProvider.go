@@ -3,6 +3,9 @@ package firebaseprovider
 import (
 	"asset/providers"
 	"context"
+	"errors"
+	"strings"
+
 	firebase "firebase.google.com/go/v4"
 	firebaseauth "firebase.google.com/go/v4/auth"
 	"google.golang.org/api/option"
@@ -10,6 +13,7 @@ import (
 
 type firebaseService struct {
 	client *firebaseauth.Client
+	//app    *firebase.App
 }
 
 func NewFirebaseProvider(serviceAccountJSON []byte) (providers.FirebaseProvider, error) {
@@ -33,4 +37,56 @@ func (f *firebaseService) VerifyIDToken(ctx context.Context, idToken string) (*f
 
 func (f *firebaseService) GetUserByUID(ctx context.Context, uid string) (*firebaseauth.UserRecord, error) {
 	return f.client.GetUser(ctx, uid)
+}
+
+func (f *firebaseService) GetUserByEmail(ctx context.Context, email string) (*firebaseauth.UserRecord, error) {
+	return f.client.GetUserByEmail(ctx, email)
+}
+
+func (f *firebaseService) CreateUser(ctx context.Context, email, phone string) (*firebaseauth.UserRecord, error) {
+	params := (&firebaseauth.UserToCreate{}).
+		Email(email).
+		EmailVerified(false).
+		Disabled(false)
+
+	if phone != "" {
+		params = params.PhoneNumber(phone)
+	}
+
+	return f.client.CreateUser(ctx, params)
+}
+
+func (f *firebaseService) DeleteAuthUser(ctx context.Context, uid string) error {
+	return f.client.DeleteUser(ctx, uid)
+}
+
+func (f *firebaseService) GetEmailFromUID(ctx context.Context, uid string) (*firebaseauth.UserRecord, error) {
+	return f.client.GetUser(ctx, uid)
+}
+
+func (f *firebaseService) UpdateUserEmail(ctx context.Context, uid, email string) error {
+	params := (&firebaseauth.UserToUpdate{}).Email(email)
+	_, err := f.client.UpdateUser(ctx, uid, params)
+	return err
+}
+
+func (f *firebaseService) UpdateUserPhone(ctx context.Context, uid, phone string) error {
+	params := (&firebaseauth.UserToUpdate{}).PhoneNumber(phone)
+	_, err := f.client.UpdateUser(ctx, uid, params)
+	return err
+}
+
+func (f *firebaseService) CustomToken(ctx context.Context, uid string) (string, error) {
+	return f.client.CustomToken(ctx, uid)
+}
+
+func (f *firebaseService) CustomTokenWithClaims(ctx context.Context, uid string, claims map[string]interface{}) (string, error) {
+	return f.client.CustomTokenWithClaims(ctx, uid, claims)
+}
+
+func (f *firebaseService) ExtractBearerToken(raw string) (string, error) {
+	if raw == "" {
+		return "", errors.New("empty token")
+	}
+	return strings.TrimPrefix(raw, "Bearer "), nil
 }
