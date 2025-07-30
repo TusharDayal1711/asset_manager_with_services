@@ -35,4 +35,6 @@ type ZapLoggerProvider interface {
 type FirebaseProvider interface {
 	VerifyIDToken(ctx context.Context, idToken string) (*firebaseauth.Token, error)
 	GetUserByUID(ctx context.Context, uid string) (*firebaseauth.UserRecord, error)
+	GetUserByEmail(ctx context.Context, email string) (*firebaseauth.UserRecord, error)
+	CreateUser(ctx context.Context, email, phone string) (*firebaseauth.UserRecord, error)
 }

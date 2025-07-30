@@ -42,16 +42,18 @@ func (f *firebaseService) GetUserByEmail(ctx context.Context, email string) (*fi
 }
 
 func (f *firebaseService) CreateUser(ctx context.Context, email, phone string) (*firebaseauth.UserRecord, error) {
-	params := (&firebaseauth.UserToCreate{}).
-		Email(email).
-		EmailVerified(false).
-		Disabled(false)
-
+	params := new(firebaseauth.UserToCreate)
+	if email != "" {
+		params = params.Email(email)
+	}
 	if phone != "" {
 		params = params.PhoneNumber(phone)
 	}
-
-	return f.client.CreateUser(ctx, params)
+	userRecords, err := f.client.CreateUser(context.Background(), params)
+	if err != nil {
+		return nil, err
+	}
+	return userRecords, nil
 }
 
 func (f *firebaseService) DeleteAuthUser(ctx context.Context, uid string) error {
