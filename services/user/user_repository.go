@@ -25,13 +25,14 @@ type UserRepository interface {
 	GetFilteredEmployeesWithAssets(ctx context.Context, filter EmployeeFilter) ([]EmployeeResponseModel, error)
 	UpdateEmployeeInfo(ctx context.Context, req UpdateEmployeeReq, adminUUID uuid.UUID) error
 	GetCurrentUserRole(ctx context.Context, tx *sqlx.Tx, userID uuid.UUID) (string, error)
-	InsertIntoUser(ctx context.Context, tx *sqlx.Tx, username, email string) (uuid.UUID, error)
+	InsertIntoUser(ctx context.Context, tx *sqlx.Tx, username, email string, firebasetoken string) (uuid.UUID, error)
 	InsertIntoUserType(ctx context.Context, tx *sqlx.Tx, userId uuid.UUID, employeeType string, createdBy uuid.UUID) error
 	UpdateUserRole(ctx context.Context, tx *sqlx.Tx, userID uuid.UUID, newRole string, updatedBy uuid.UUID) error
 	InsertIntoUserRole(ctx context.Context, tx *sqlx.Tx, userId uuid.UUID, role string, createdBy uuid.UUID) error
 	InsertUserRole(ctx context.Context, tx *sqlx.Tx, userID uuid.UUID, role string, createdBy uuid.UUID) error
 	CreateFirebaseUser(ctx context.Context, name, email string) (uuid.UUID, error)
 	GetFirebase() providers.FirebaseProvider
+	GetEmailByUserID(ctx context.Context, userId uuid.UUID) (string, error)
 }
 
 type PostgresUserRepository struct {
@@ -332,7 +333,7 @@ LIMIT $6 OFFSET $7;
 
 func (r *PostgresUserRepository) UpdateEmployeeInfo(ctx context.Context, req UpdateEmployeeReq, adminUUID uuid.UUID) error {
 	r.Logger.GetLogger().Info("updating employee information", zap.String("admin_id", adminUUID.String()))
-	query := `UPDATE users SET `
+	query := `UPDATE users SET`
 	args := []interface{}{}
 	argPos := 1
 
@@ -464,14 +465,14 @@ func (r *PostgresUserRepository) IsUserExists(ctx context.Context, tx *sqlx.Tx, 
 	return true, nil
 }
 
-func (r *PostgresUserRepository) InsertIntoUser(ctx context.Context, tx *sqlx.Tx, username, email string) (uuid.UUID, error) {
+func (r *PostgresUserRepository) InsertIntoUser(ctx context.Context, tx *sqlx.Tx, username, email string, firebasetoken string) (uuid.UUID, error) {
 	r.Logger.GetLogger().Info("inserting new user into users table", zap.String("username", username), zap.String("email", email))
 	var id uuid.UUID
 	err := tx.GetContext(ctx, &id, `
-		INSERT INTO users (username, email)
-		VALUES ($1, $2)
+		INSERT INTO users (username, email, firebase_uid)
+		VALUES ($1, $2, $3)
 		RETURNING id
-	`, username, email)
+	`, username, email, firebasetoken)
 	if err != nil {
 		r.Logger.GetLogger().Error("failed to insert into users table", zap.Error(err))
 		return uuid.Nil, fmt.Errorf("failed to insert user: %w", err)
@@ -517,6 +518,20 @@ func (r *PostgresUserRepository) InsertIntoUserType(ctx context.Context, tx *sql
 	return nil
 }
 
+func (r *PostgresUserRepository) GetEmailByUserID(ctx context.Context, userId uuid.UUID) (string, error) {
+	var userMail string
+	err := r.DB.GetContext(ctx, &userMail, `SELECT email FROM users WHERE id = $1 AND archived_at IS NULL`, userId)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			r.Logger.GetLogger().Warn("no user found with given ID", zap.String("user_id", userId.String()))
+			return "", nil
+		}
+		r.Logger.GetLogger().Error("failed to get user email", zap.String("user_id", userId.String()), zap.Error(err))
+		return "", fmt.Errorf("failed to get user email: %w", err)
+	}
+	return userMail, nil
+}
+
 func (r *PostgresUserRepository) CreateFirebaseUser(ctx context.Context, name, email string) (userID uuid.UUID, err error) {
 	r.Logger.GetLogger().Info("creating firebase user in postgres repository", zap.String("name", name), zap.String("email", email))
 	tx, err := r.DB.BeginTxx(ctx, nil)
@@ -543,7 +558,7 @@ func (r *PostgresUserRepository) CreateFirebaseUser(ctx context.Context, name, e
 		}
 	}()
 
-	userID, err = r.InsertIntoUser(ctx, tx, name, email)
+	userID, err = r.InsertIntoUser(ctx, tx, name, email, "")
 	if err != nil {
 		r.Logger.GetLogger().Error("failed to insert user during firebase user creation", zap.Error(err))
 		return uuid.Nil, err

@@ -8,6 +8,7 @@ import (
 	"github.com/go-playground/validator/v10"
 	"github.com/google/uuid"
 	jsoniter "github.com/json-iterator/go"
+	"github.com/pkg/errors"
 	"go.uber.org/zap"
 	"net/http"
 	"strings"
@@ -17,13 +18,15 @@ type UserHandler struct {
 	Service        UserService
 	AuthMiddleware providers.AuthMiddlewareService
 	Logger         providers.ZapLoggerProvider
+	firebase       providers.FirebaseProvider
 }
 
-func NewUserHandler(service UserService, auth providers.AuthMiddlewareService, log providers.ZapLoggerProvider) *UserHandler {
+func NewUserHandler(service UserService, auth providers.AuthMiddlewareService, log providers.ZapLoggerProvider, firebase providers.FirebaseProvider) *UserHandler {
 	return &UserHandler{
 		Service:        service,
 		AuthMiddleware: auth,
 		Logger:         log,
+		firebase:       firebase,
 	}
 }
 
@@ -70,43 +73,6 @@ func (h *UserHandler) ChangeUserRole(w http.ResponseWriter, r *http.Request) {
 	h.Logger.GetLogger().Info("User role changed successfully", zap.String("targetUserID", req.UserID))
 	w.WriteHeader(http.StatusOK)
 	jsoniter.NewEncoder(w).Encode(map[string]string{"message": "user role changed successfully"})
-}
-
-func (h *UserHandler) DeleteUser(w http.ResponseWriter, r *http.Request) {
-	h.Logger.GetLogger().Info("DeleteUser request received")
-	_, roles, err := h.AuthMiddleware.GetUserAndRolesFromContext(r)
-	if err != nil {
-		h.Logger.GetLogger().Error("Unauthorized access attempt in DeleteUser", zap.Error(err))
-		utils.RespondError(w, http.StatusUnauthorized, err, "unauthorized")
-		return
-	}
-	if len(roles) == 0 || (roles[0] != "admin" && roles[0] != "asset_manager") {
-		h.Logger.GetLogger().Warn("Forbidden access attempt in DeleteUser", zap.Any("roles", roles))
-		utils.RespondError(w, http.StatusForbidden, nil, "only admin and asset manager can delete users")
-		return
-	}
-	userID := r.URL.Query().Get("user_id")
-	if userID == "" {
-		h.Logger.GetLogger().Error("Missing user_id in DeleteUser request")
-		utils.RespondError(w, http.StatusBadRequest, fmt.Errorf("user_id is required"), "invalid user id")
-		return
-	}
-	userUUID, err := uuid.Parse(userID)
-	if err != nil {
-		h.Logger.GetLogger().Error("Invalid user ID format in DeleteUser", zap.String("userID", userID), zap.Error(err))
-		utils.RespondError(w, http.StatusBadRequest, err, "invalid user id")
-		return
-	}
-	h.Logger.GetLogger().Info("Attempting to delete user", zap.String("userID", userID), zap.String("initiatingRole", roles[0]))
-	err = h.Service.DeleteUser(r.Context(), userUUID, roles[0])
-	if err != nil {
-		h.Logger.GetLogger().Error("Failed to delete user", zap.String("userID", userID), zap.Error(err))
-		utils.RespondError(w, http.StatusInternalServerError, err, err.Error())
-		return
-	}
-	h.Logger.GetLogger().Info("User deleted successfully", zap.String("userID", userID))
-	w.WriteHeader(http.StatusOK)
-	jsoniter.NewEncoder(w).Encode(map[string]string{"message": "user deleted successfully"})
 }
 
 func (h *UserHandler) GetEmployeesWithFilters(w http.ResponseWriter, r *http.Request) {
@@ -356,7 +322,7 @@ func (h *UserHandler) GoogleAuth(w http.ResponseWriter, r *http.Request) {
 	h.Logger.GetLogger().Info("GoogleAuth request received")
 	authHeader := r.Header.Get("Authorization")
 	if !strings.HasPrefix(authHeader, "Bearer ") {
-		h.Logger.GetLogger().Warn("Missing bearer token in GoogleAuth request")
+		h.Logger.GetLogger().Warn("missing bearer token in GoogleAuth request")
 		utils.RespondError(w, http.StatusBadRequest, fmt.Errorf("missing bearer token"), "unauthorized")
 		return
 	}
@@ -385,4 +351,72 @@ func (h *UserHandler) CreateAdmin(w http.ResponseWriter, r *http.Request) {
 	} else {
 		jsoniter.NewEncoder(w).Encode(map[string]string{"message": "admin created successfully"})
 	}
+}
+
+// register through firebase
+func (h *UserHandler) PublicRegisterThroughFirebase(w http.ResponseWriter, r *http.Request) {
+	h.Logger.GetLogger().Info("PublicRegisterThroughFirebase request received")
+
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" {
+		utils.RespondError(w, http.StatusUnauthorized, errors.New("missing Authorization header"), "unauthorized")
+		return
+	}
+	idToken := strings.TrimPrefix(authHeader, "Bearer ")
+	resp, err := h.Service.FirebaseUserRegistration(r.Context(), idToken)
+	if err != nil {
+		if strings.Contains(err.Error(), "user already exists") {
+			utils.RespondError(w, http.StatusConflict, err, "user already exists")
+		} else if strings.Contains(err.Error(), "invalid firebase token") {
+			utils.RespondError(w, http.StatusUnauthorized, err, "unauthorized")
+		} else {
+			utils.RespondError(w, http.StatusInternalServerError, err, "registration failed")
+		}
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"message":     "register through firebase successful",
+		"userId":      resp.UserID,
+		"firebaseUID": resp.FirebaseUID,
+	})
+}
+
+func (h *UserHandler) DeleteUser(w http.ResponseWriter, r *http.Request) {
+	h.Logger.GetLogger().Info("DeleteUser request received")
+	_, roles, err := h.AuthMiddleware.GetUserAndRolesFromContext(r)
+	if err != nil {
+		h.Logger.GetLogger().Error("Unauthorized access attempt in DeleteUser", zap.Error(err))
+		utils.RespondError(w, http.StatusUnauthorized, err, "unauthorized")
+		return
+	}
+	if len(roles) == 0 || (roles[0] != "admin" && roles[0] != "asset_manager") {
+		h.Logger.GetLogger().Warn("Forbidden access attempt in DeleteUser", zap.Any("roles", roles))
+		utils.RespondError(w, http.StatusForbidden, nil, "only admin and asset manager can delete users")
+		return
+	}
+	userID := r.URL.Query().Get("user_id")
+	if userID == "" {
+		h.Logger.GetLogger().Error("Missing user_id in DeleteUser request")
+		utils.RespondError(w, http.StatusBadRequest, fmt.Errorf("user_id is required"), "invalid user id")
+		return
+	}
+	userUUID, err := uuid.Parse(userID)
+	if err != nil {
+		h.Logger.GetLogger().Error("Invalid user ID format in DeleteUser", zap.String("userID", userID), zap.Error(err))
+		utils.RespondError(w, http.StatusBadRequest, err, "invalid user id")
+		return
+	}
+
+	h.Logger.GetLogger().Info("Attempting to delete user", zap.String("userID", userID), zap.String("initiatingRole", roles[0]))
+	err = h.Service.DeleteUser(r.Context(), userUUID, roles[0])
+	if err != nil {
+		h.Logger.GetLogger().Error("Failed to delete user", zap.String("userID", userID), zap.Error(err))
+		utils.RespondError(w, http.StatusInternalServerError, err, err.Error())
+		return
+	}
+	h.Logger.GetLogger().Info("User deleted successfully", zap.String("userID", userID))
+	w.WriteHeader(http.StatusOK)
+	jsoniter.NewEncoder(w).Encode(map[string]string{"message": "user deleted successfully"})
 }
