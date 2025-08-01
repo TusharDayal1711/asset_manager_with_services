@@ -7,10 +7,12 @@ import (
 	firebaseprovider "asset/providers/firebaseProvider"
 	"asset/providers/loggerProvider"
 	"asset/providers/middlewareprovider"
+	redisprovider "asset/providers/redisProvider"
 	"asset/services/asset"
 	"asset/services/user"
 	"context"
 	"fmt"
+	"go.uber.org/zap"
 	"log"
 	"net/http"
 	"os"
@@ -26,6 +28,7 @@ type Server struct {
 	httpServer   *http.Server
 	Logger       providers.ZapLoggerProvider
 	Firebase     providers.FirebaseProvider
+	Redis        providers.RedisProvider
 }
 
 func ServerInit() *Server {
@@ -38,30 +41,38 @@ func ServerInit() *Server {
 	logs.GetLogger().Info("inside serverInit")
 
 	//firebase
-	serviceAccountJSON, err := os.ReadFile("assetmanagement01-3b299-firebase-adminsdk-fbsvc-34cacf90ad.json")
+	serviceAccountJSON, err := os.ReadFile(os.Getenv("FIREBASE_CONFIG"))
 	if err != nil {
-		log.Fatalf("failed to read firebase credentials: %v", err)
+		logs.GetLogger().Error("failed to read service account json file ::", zap.Error(err))
 	}
 	firebase, err := firebaseprovider.NewFirebaseProvider(serviceAccountJSON)
 	if err != nil {
-		log.Fatalf("failed to initialize firebase: %v", err)
+		logs.GetLogger().Error("failed to initialize firebase provider ::", zap.Error(err))
 	}
 
+	//redis provider
+	redisPort := ":" + os.Getenv("REDIS_PORT")
+	redis := redisprovider.NewRedisProvider(redisPort)
+	logs.GetLogger().Info("redis initialized")
+	redis.Ping(context.Background())
+
+	//database provider
 	db := databaseProvider.NewDBProvider(cfg.GetDatabaseString())
 	middleware := middlewareprovider.NewAuthMiddlewareService(db.DB())
 
 	//repositories
-	userRepo := userservice.NewUserRepository(db.DB(), logs, firebase)
+	userRepo := userservice.NewUserRepository(db.DB(), logs, firebase, redis)
 	assetRepo := assetservice.NewAssetRepository(db.DB())
 
 	//services
-	userService := userservice.NewUserService(userRepo, db.DB(), logs)
+	userService := userservice.NewUserService(userRepo, db.DB(), logs, firebase)
 	assetService := assetservice.NewAssetService(assetRepo, db.DB())
 
 	//handlers
-	userHandler := userservice.NewUserHandler(userService, middleware, logs)
+	userHandler := userservice.NewUserHandler(userService, middleware, logs, firebase)
 	assetHandler := assetservice.NewAssetHandler(assetService, middleware)
 
+	logs.GetLogger().Info("\nall provider and services initialized...")
 	return &Server{
 		Config:       cfg,
 		DB:           db,
@@ -69,6 +80,7 @@ func ServerInit() *Server {
 		UserHandler:  userHandler,
 		AssetHandler: assetHandler,
 		Logger:       logs,
+		Redis:        redis,
 	}
 }
 
@@ -85,12 +97,11 @@ func (s *Server) Start() {
 
 	fmt.Println("server running on", addr)
 	if err := s.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		log.Fatalf("server error: %v", err)
+		s.Logger.GetLogger().Fatal("failed to start server", zap.Error(err))
 	}
 }
 
 func (s *Server) Stop() {
-	fmt.Println("shutting down server...")
 	s.Logger.GetLogger().Info("shutting down server...")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -98,10 +109,11 @@ func (s *Server) Stop() {
 	if err := s.httpServer.Shutdown(ctx); err != nil {
 		log.Printf("error shutting down server: %v", err)
 	}
-
 	if err := s.DB.Close(); err != nil {
 		log.Printf("error closing DB: %v", err)
 	}
-
-	fmt.Println("Server shutdown complete.")
+	if err := s.Redis.Close(); err != nil {
+		s.Logger.GetLogger().Error("error closing redis connection")
+	}
+	s.Logger.GetLogger().Info("Server shutdown gracefully")
 }
