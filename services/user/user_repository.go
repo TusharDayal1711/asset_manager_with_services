@@ -6,8 +6,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/go-jose/go-jose/v4/json"
 	"go.uber.org/zap"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
@@ -39,10 +41,11 @@ type PostgresUserRepository struct {
 	DB       *sqlx.DB
 	Logger   providers.ZapLoggerProvider
 	Firebase providers.FirebaseProvider
+	Redis    providers.RedisProvider
 }
 
-func NewUserRepository(db *sqlx.DB, log providers.ZapLoggerProvider, firebase providers.FirebaseProvider) UserRepository {
-	return &PostgresUserRepository{DB: db, Logger: log, Firebase: firebase}
+func NewUserRepository(db *sqlx.DB, log providers.ZapLoggerProvider, firebase providers.FirebaseProvider, redis providers.RedisProvider) UserRepository {
+	return &PostgresUserRepository{DB: db, Logger: log, Firebase: firebase, Redis: redis}
 }
 
 func (r *PostgresUserRepository) DeleteUserByID(ctx context.Context, userID uuid.UUID) (err error) {
@@ -136,32 +139,88 @@ func (r *PostgresUserRepository) GetUserByEmail(ctx context.Context, userEmail s
 	return userId, nil
 }
 
+// //GetUSer
+//
+//	func (r *userRepository) GetUserDashboardById(ctx context.Context, userID uuid.UUID) (*models.UserDashboard, error) {
+//		cacheKey := fmt.Sprintf("user:dashboard:%s", userID.String())
+//
+//		// Try Redis cache first
+//		cached, err := r.Redis.Get(ctx, cacheKey).Result()
+//		if err == nil && cached != "" {
+//			var dashboard models.UserDashboard
+//			if err := json.Unmarshal([]byte(cached), &dashboard); err == nil {
+//				return &dashboard, nil
+//			}
+//			// If unmarshal fails, continue to fetch from DB
+//		}
+//
+//		// Fetch from DB
+//		var dashboard models.UserDashboard
+//
+//		// 1. Get user basic info
+//		query := `SELECT id, email, name, phone, address FROM users WHERE id = $1`
+//		if err := r.DB.GetContext(ctx, &dashboard.User, query, userID); err != nil {
+//			return nil, err
+//		}
+//
+//		// 2. Get user roles
+//		roleQuery := `SELECT r.name FROM roles r JOIN user_roles ur ON r.id = ur.role_id WHERE ur.user_id = $1`
+//		if err := r.DB.SelectContext(ctx, &dashboard.Roles, roleQuery, userID); err != nil {
+//			return nil, err
+//		}
+//
+//		// 3. Get assigned assets
+//		assetQuery := `SELECT a.id, a.name, a.status FROM assets a WHERE a.assigned_to = $1`
+//		if err := r.DB.SelectContext(ctx, &dashboard.AssignedAssets, assetQuery, userID); err != nil {
+//			return nil, err
+//		}
+//
+//		// Save to Redis with 10 min TTL
+//		jsonData, err := json.Marshal(dashboard)
+//		if err == nil {
+//			_ = r.Redis.Set(ctx, cacheKey, jsonData, 10*time.Minute).Err()
+//		}
+//
+//		return &dashboard, nil
+//	}
 func (r *PostgresUserRepository) GetUserDashboardById(ctx context.Context, userID uuid.UUID) (user UserDashboardRes, err error) {
+	RedisCacheKey := fmt.Sprintf("user:dashboard:%s", userID.String())
+	//get data if present
+	cachedData, err := r.Redis.Get(ctx, RedisCacheKey)
+	if err == nil && cachedData != "" {
+		r.Logger.GetLogger().Info("user dashboard found in Redis cache", zap.String("user_id", userID.String()))
+		err = json.Unmarshal([]byte(cachedData), &user)
+		if err == nil {
+			return user, nil
+		}
+		r.Logger.GetLogger().Warn("failed to unmarshal cached dashboard, fetching from DB", zap.Error(err))
+	}
+
 	r.Logger.GetLogger().Info("starting transaction to get user dashboard by id", zap.String("user_id", userID.String()))
 	tx, err := r.DB.BeginTxx(ctx, nil)
 	if err != nil {
-		r.Logger.GetLogger().Error("failed to begin transaction for getuserdashboardbyid", zap.Error(err))
+		r.Logger.GetLogger().Error("failed to begin transaction", zap.Error(err))
 		return user, fmt.Errorf("failed to begin transaction: %w", err)
 	}
+
 	defer func() {
 		if p := recover(); p != nil {
 			tx.Rollback()
-			r.Logger.GetLogger().Error("panic recovered during getuserdashboardbyid transaction", zap.Any("recover_info", p))
+			r.Logger.GetLogger().Error("panic recovered", zap.Any("recover_info", p))
 			panic(p)
 		} else if err != nil {
 			tx.Rollback()
-			r.Logger.GetLogger().Error("rolling back transaction for getuserdashboardbyid due to error", zap.Error(err))
+			r.Logger.GetLogger().Error("rolling back transaction", zap.Error(err))
 		} else {
 			err = tx.Commit()
 			if err != nil {
-				r.Logger.GetLogger().Error("failed to commit transaction for getuserdashboardbyid", zap.Error(err))
+				r.Logger.GetLogger().Error("failed to commit transaction", zap.Error(err))
 			} else {
-				r.Logger.GetLogger().Info("transaction committed successfully for getuserdashboardbyid")
+				r.Logger.GetLogger().Info("transaction committed successfully")
 			}
 		}
 	}()
 
-	r.Logger.GetLogger().Debug("fetching user details for dashboard", zap.String("user_id", userID.String()))
 	err = tx.GetContext(ctx, &user, `
 		SELECT u.id, u.username, u.email, u.contact_no, ut.type
 		FROM users u
@@ -169,23 +228,17 @@ func (r *PostgresUserRepository) GetUserDashboardById(ctx context.Context, userI
 		WHERE u.id = $1 AND u.archived_at IS NULL
 	`, userID)
 	if err != nil {
-		r.Logger.GetLogger().Error("failed to fetch user details for dashboard", zap.String("user_id", userID.String()), zap.Error(err))
 		return user, fmt.Errorf("failed to fetch user: %w", err)
 	}
-	r.Logger.GetLogger().Debug("user details fetched for dashboard", zap.String("user_id", userID.String()))
 
-	r.Logger.GetLogger().Debug("fetching user roles for dashboard", zap.String("user_id", userID.String()))
 	err = tx.SelectContext(ctx, &user.Roles, `
 		SELECT role FROM user_roles 
 		WHERE user_id = $1 AND archived_at IS NULL
 	`, userID)
 	if err != nil {
-		r.Logger.GetLogger().Error("failed to fetch roles for dashboard", zap.String("user_id", userID.String()), zap.Error(err))
 		return user, fmt.Errorf("failed to fetch roles: %w", err)
 	}
-	r.Logger.GetLogger().Debug("user roles fetched for dashboard", zap.String("user_id", userID.String()))
 
-	r.Logger.GetLogger().Debug("fetching assigned assets for dashboard", zap.String("user_id", userID.String()))
 	err = tx.SelectContext(ctx, &user.AssignedAssets, `
 		SELECT a.id, a.brand, a.model, a.serial_no, a.type, a.status, a.owned_by
 		FROM assets a
@@ -193,15 +246,96 @@ func (r *PostgresUserRepository) GetUserDashboardById(ctx context.Context, userI
 		WHERE aa.employee_id = $1 AND aa.returned_at IS NULL AND aa.archived_at IS NULL AND a.archived_at IS NULL
 	`, userID)
 	if err != nil {
-		r.Logger.GetLogger().Error("failed to fetch assigned assets for dashboard", zap.String("user_id", userID.String()), zap.Error(err))
 		return user, fmt.Errorf("failed to fetch assigned assets: %w", err)
 	}
-	r.Logger.GetLogger().Info("successfully fetched user dashboard by id", zap.String("user_id", userID.String()))
+
+	jsonData, err := json.Marshal(user)
+	if err == nil {
+		_ = r.Redis.Set(ctx, RedisCacheKey, jsonData, 10*time.Minute)
+		r.Logger.GetLogger().Info("user dashboard cached in Redis", zap.String("user_id", userID.String()))
+		fmt.Println(time.Now().Format(time.RFC3339))
+	}
+
 	return user, nil
 }
 
+//// /GetUserDashboard
+//func (r *PostgresUserRepository) GetUserDashboardById(ctx context.Context, userID uuid.UUID) (user UserDashboardRes, err error) {
+//	r.Logger.GetLogger().Info("starting transaction to get user dashboard by id", zap.String("user_id", userID.String()))
+//	tx, err := r.DB.BeginTxx(ctx, nil)
+//	if err != nil {
+//		r.Logger.GetLogger().Error("failed to begin transaction for getuserdashboardbyid", zap.Error(err))
+//		return user, fmt.Errorf("failed to begin transaction: %w", err)
+//	}
+//	defer func() {
+//		if p := recover(); p != nil {
+//			tx.Rollback()
+//			r.Logger.GetLogger().Error("panic recovered during getuserdashboardbyid transaction", zap.Any("recover_info", p))
+//			panic(p)
+//		} else if err != nil {
+//			tx.Rollback()
+//			r.Logger.GetLogger().Error("rolling back transaction for getuserdashboardbyid due to error", zap.Error(err))
+//		} else {
+//			err = tx.Commit()
+//			if err != nil {
+//				r.Logger.GetLogger().Error("failed to commit transaction for getuserdashboardbyid", zap.Error(err))
+//			} else {
+//				r.Logger.GetLogger().Info("transaction committed successfully for getuserdashboardbyid")
+//			}
+//		}
+//	}()
+//
+//	r.Logger.GetLogger().Debug("fetching user details for dashboard", zap.String("user_id", userID.String()))
+//	err = tx.GetContext(ctx, &user, `
+//		SELECT u.id, u.username, u.email, u.contact_no, ut.type
+//		FROM users u
+//		LEFT JOIN user_type ut ON ut.user_id = u.id AND ut.archived_at IS NULL
+//		WHERE u.id = $1 AND u.archived_at IS NULL
+//	`, userID)
+//	if err != nil {
+//		r.Logger.GetLogger().Error("failed to fetch user details for dashboard", zap.String("user_id", userID.String()), zap.Error(err))
+//		return user, fmt.Errorf("failed to fetch user: %w", err)
+//	}
+//	r.Logger.GetLogger().Debug("user details fetched for dashboard", zap.String("user_id", userID.String()))
+//
+//	r.Logger.GetLogger().Debug("fetching user roles for dashboard", zap.String("user_id", userID.String()))
+//	err = tx.SelectContext(ctx, &user.Roles, `
+//		SELECT role FROM user_roles
+//		WHERE user_id = $1 AND archived_at IS NULL
+//	`, userID)
+//	if err != nil {
+//		r.Logger.GetLogger().Error("failed to fetch roles for dashboard", zap.String("user_id", userID.String()), zap.Error(err))
+//		return user, fmt.Errorf("failed to fetch roles: %w", err)
+//	}
+//	r.Logger.GetLogger().Debug("user roles fetched for dashboard", zap.String("user_id", userID.String()))
+//
+//	r.Logger.GetLogger().Debug("fetching assigned assets for dashboard", zap.String("user_id", userID.String()))
+//	err = tx.SelectContext(ctx, &user.AssignedAssets, `
+//		SELECT a.id, a.brand, a.model, a.serial_no, a.type, a.status, a.owned_by
+//		FROM assets a
+//		INNER JOIN asset_assign aa ON aa.asset_id = a.id
+//		WHERE aa.employee_id = $1 AND aa.returned_at IS NULL AND aa.archived_at IS NULL AND a.archived_at IS NULL
+//	`, userID)
+//	if err != nil {
+//		r.Logger.GetLogger().Error("failed to fetch assigned assets for dashboard", zap.String("user_id", userID.String()), zap.Error(err))
+//		return user, fmt.Errorf("failed to fetch assigned assets: %w", err)
+//	}
+//	r.Logger.GetLogger().Info("successfully fetched user dashboard by id", zap.String("user_id", userID.String()))
+//	return user, nil
+//}
+
 func (r *PostgresUserRepository) GetUserRoleById(ctx context.Context, userId uuid.UUID) (string, error) {
 	r.Logger.GetLogger().Info("fetching user role by id", zap.String("user_id", userId.String()))
+
+	redisKey := fmt.Sprintf("user:GetUserRoleById:%s", userId.String())
+
+	//getting data from redis if present
+	if cachedData, err := r.Redis.Get(ctx, redisKey); err == nil && cachedData != "" {
+		r.Logger.GetLogger().Info("user role found in Redis cache", zap.String("user_id", userId.String()))
+		return cachedData, nil
+	}
+
+	//if not run db query
 	var userRole string
 	err := r.DB.GetContext(ctx, &userRole, `
 		SELECT role FROM user_roles 
@@ -215,7 +349,14 @@ func (r *PostgresUserRepository) GetUserRoleById(ctx context.Context, userId uui
 		r.Logger.GetLogger().Error("failed to fetch user role", zap.String("user_id", userId.String()), zap.Error(err))
 		return "", fmt.Errorf("failed to fetch user role: %w", err)
 	}
-	r.Logger.GetLogger().Info("user role fetched successfully", zap.String("user_id", userId.String()), zap.String("role", userRole))
+
+	cacheErr := r.Redis.Set(ctx, redisKey, userRole, 10*time.Minute)
+	if cacheErr != nil {
+		r.Logger.GetLogger().Warn("failed to cache user role in Redis", zap.Error(cacheErr))
+	} else {
+		r.Logger.GetLogger().Info("cached user role in Redis", zap.String("user_id", userId.String()))
+	}
+
 	return userRole, nil
 }
 
