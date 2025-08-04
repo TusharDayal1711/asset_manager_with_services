@@ -2,13 +2,14 @@ package main
 
 import (
 	"asset/server"
+	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
 )
 
 func main() {
-	
+
 	srv := server.ServerInit()
 	go srv.Start()
 	srv.Logger.GetLogger().Info("server initialized...")
@@ -17,4 +18,5 @@ func main() {
 	<-done
 	srv.Stop()
 	srv.Logger.GetLogger().Info("server stopped...")
+	fmt.Print("test is test conflict 1 branch...")
 }
