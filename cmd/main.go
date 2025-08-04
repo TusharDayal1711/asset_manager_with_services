@@ -2,6 +2,7 @@ package main
 
 import (
 	"asset/server"
+	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
@@ -17,4 +18,5 @@ func main() {
 	<-done
 	srv.Stop()
 	srv.Logger.GetLogger().Info("server stopped...")
+	fmt.Println("test conflict 2....")
 }
