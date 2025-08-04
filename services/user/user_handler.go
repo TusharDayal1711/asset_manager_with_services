@@ -158,7 +158,7 @@ func (h *UserHandler) PublicRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.Logger.GetLogger().Info("Attempting public registration", zap.String("email", req.Email))
-	userID, err := h.Service.PublicRegister(r.Context(), req)
+	userID, firebaseUserID, err := h.Service.PublicRegister(r.Context(), req)
 	if err != nil {
 		h.Logger.GetLogger().Error("Public registration failed", zap.String("email", req.Email), zap.Error(err))
 		utils.RespondError(w, http.StatusBadRequest, err, err.Error())
@@ -166,7 +166,8 @@ func (h *UserHandler) PublicRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	h.Logger.GetLogger().Info("Public registration successful", zap.String("userID", userID.String()))
 	w.WriteHeader(http.StatusCreated)
-	jsoniter.NewEncoder(w).Encode(map[string]interface{}{"message": "account created successfully", "userId": userID})
+	jsoniter.NewEncoder(w).Encode(map[string]interface{}{"message": "account created successfully", "userId": userID,
+		"firebaseUID": firebaseUserID})
 }
 
 func (h *UserHandler) RegisterEmployeeByManager(w http.ResponseWriter, r *http.Request) {
@@ -210,7 +211,9 @@ func (h *UserHandler) RegisterEmployeeByManager(w http.ResponseWriter, r *http.R
 	}
 	h.Logger.GetLogger().Info("Employee registered successfully by manager", zap.String("managerID", managerID), zap.String("userID", userID.String()))
 	w.WriteHeader(http.StatusCreated)
-	jsoniter.NewEncoder(w).Encode(map[string]interface{}{"user created": userID})
+	jsoniter.NewEncoder(w).Encode(map[string]interface{}{
+		"user UUID": userID,
+	})
 }
 
 func (h *UserHandler) UpdateEmployee(w http.ResponseWriter, r *http.Request) {
@@ -419,4 +422,9 @@ func (h *UserHandler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 	h.Logger.GetLogger().Info("User deleted successfully", zap.String("userID", userID))
 	w.WriteHeader(http.StatusOK)
 	jsoniter.NewEncoder(w).Encode(map[string]string{"message": "user deleted successfully"})
+}
+
+func (h *UserHandler) RedisTesting(w http.ResponseWriter, r *http.Request) {
+	h.Logger.GetLogger().Info("RedisTesting request received")
+
 }

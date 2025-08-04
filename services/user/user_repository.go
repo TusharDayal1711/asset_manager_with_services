@@ -184,6 +184,13 @@ func (r *PostgresUserRepository) GetUserByEmail(ctx context.Context, userEmail s
 //		return &dashboard, nil
 //	}
 func (r *PostgresUserRepository) GetUserDashboardById(ctx context.Context, userID uuid.UUID) (user UserDashboardRes, err error) {
+
+	start := time.Now()
+	defer func() {
+		elapsed := time.Since(start).Microseconds()
+		r.Logger.GetLogger().Info("total execution time", zap.Int64("duration", elapsed))
+	}()
+
 	RedisCacheKey := fmt.Sprintf("user:dashboard:%s", userID.String())
 	//get data if present
 	cachedData, err := r.Redis.Get(ctx, RedisCacheKey)
@@ -251,7 +258,7 @@ func (r *PostgresUserRepository) GetUserDashboardById(ctx context.Context, userI
 
 	jsonData, err := json.Marshal(user)
 	if err == nil {
-		_ = r.Redis.Set(ctx, RedisCacheKey, jsonData, 10*time.Minute)
+		_ = r.Redis.Set(ctx, RedisCacheKey, jsonData, 5*time.Minute)
 		r.Logger.GetLogger().Info("user dashboard cached in Redis", zap.String("user_id", userID.String()))
 		fmt.Println(time.Now().Format(time.RFC3339))
 	}
@@ -350,7 +357,7 @@ func (r *PostgresUserRepository) GetUserRoleById(ctx context.Context, userId uui
 		return "", fmt.Errorf("failed to fetch user role: %w", err)
 	}
 
-	cacheErr := r.Redis.Set(ctx, redisKey, userRole, 10*time.Minute)
+	cacheErr := r.Redis.Set(ctx, redisKey, userRole, 5*time.Minute)
 	if cacheErr != nil {
 		r.Logger.GetLogger().Warn("failed to cache user role in Redis", zap.Error(cacheErr))
 	} else {
@@ -364,6 +371,19 @@ func (r *PostgresUserRepository) GetUserAssetTimeline(ctx context.Context, userI
 	r.Logger.GetLogger().Info("fetching user asset timeline", zap.String("user_id", userID.String()))
 	timeline := make([]UserTimelineRes, 0)
 
+	//generate key
+	redisKey := fmt.Sprintf("user:GetUserAssetTimeline:%s", userID.String())
+
+	//get data from redis, if preset
+	if cached, err := r.Redis.Get(ctx, redisKey); err == nil && cached != "" {
+		r.Logger.GetLogger().Info("user asset timeline found in Redis cache", zap.String("user_id", userID.String()))
+		if err := json.Unmarshal([]byte(cached), &timeline); err == nil {
+			return timeline, nil
+		}
+		r.Logger.GetLogger().Warn("failed to unmarshal cached timeline, falling back to DB", zap.Error(err))
+	}
+
+	//if not present in redis, run query and then store data
 	err := r.DB.SelectContext(ctx, &timeline, `
 		SELECT 
 			a.asset_id,
@@ -382,6 +402,18 @@ func (r *PostgresUserRepository) GetUserAssetTimeline(ctx context.Context, userI
 		r.Logger.GetLogger().Error("failed to get user timeline", zap.String("user_id", userID.String()), zap.Error(err))
 		return nil, fmt.Errorf("failed to get user timeline: %w", err)
 	}
+
+	//store data in cache
+	cacheBytes, err := json.Marshal(timeline)
+	if err == nil {
+		cacheErr := r.Redis.Set(ctx, redisKey, string(cacheBytes), 5*time.Minute)
+		if cacheErr != nil {
+			r.Logger.GetLogger().Warn("failed to cache asset timeline in Redis", zap.Error(cacheErr))
+		} else {
+			r.Logger.GetLogger().Info("cached user asset timeline in Redis", zap.String("user_id", userID.String()))
+		}
+	}
+
 	r.Logger.GetLogger().Info("successfully fetched user asset timeline", zap.String("user_id", userID.String()), zap.Int("timeline_entries", len(timeline)))
 	return timeline, nil
 }
@@ -589,20 +621,34 @@ func (r *PostgresUserRepository) ArchiveUserRoles(ctx context.Context, tx *sqlx.
 
 func (r *PostgresUserRepository) IsUserExists(ctx context.Context, tx *sqlx.Tx, email string) (bool, error) {
 	r.Logger.GetLogger().Info("checking if user exists by email", zap.String("email", email))
+
+	redisKey := fmt.Sprintf("user:IsUserExists:%s", email)
+
+	//get value from cache if present
+	if cached, err := r.Redis.Get(ctx, redisKey); err == nil && cached != "" {
+		r.Logger.GetLogger().Info("user existence found in Redis cache", zap.String("email", email))
+		return cached == "true", nil
+	}
+
+	//run query and store value in redis
 	var id uuid.UUID
 	err := tx.QueryRowContext(ctx, `
 		SELECT id FROM users 
 		WHERE email = $1 AND archived_at IS NULL
 	`, email).Scan(&id)
+
 	if err == sql.ErrNoRows {
 		r.Logger.GetLogger().Debug("user does not exist", zap.String("email", email))
+		_ = r.Redis.Set(ctx, redisKey, "false", 10*time.Minute)
 		return false, nil
 	}
 	if err != nil {
 		r.Logger.GetLogger().Error("failed to check if user exists", zap.String("email", email), zap.Error(err))
 		return false, fmt.Errorf("failed to check existing user: %w", err)
 	}
+
 	r.Logger.GetLogger().Info("user exists", zap.String("user_id", id.String()), zap.String("email", email))
+	_ = r.Redis.Set(ctx, redisKey, "true", 10*time.Minute)
 	return true, nil
 }
 
@@ -660,6 +706,14 @@ func (r *PostgresUserRepository) InsertIntoUserType(ctx context.Context, tx *sql
 }
 
 func (r *PostgresUserRepository) GetEmailByUserID(ctx context.Context, userId uuid.UUID) (string, error) {
+	redisKey := fmt.Sprintf("user:GetEmailByUserID:%s", userId.String())
+	//get data from redis, if present
+	if cached, err := r.Redis.Get(ctx, redisKey); err == nil && cached != "" {
+		r.Logger.GetLogger().Info("user email found in Redis cache", zap.String("user_id", userId.String()))
+		return cached, nil
+	}
+
+	//if not present for user id , run query and then store in redis cace
 	var userMail string
 	err := r.DB.GetContext(ctx, &userMail, `SELECT email FROM users WHERE id = $1 AND archived_at IS NULL`, userId)
 	if err != nil {
@@ -670,6 +724,12 @@ func (r *PostgresUserRepository) GetEmailByUserID(ctx context.Context, userId uu
 		r.Logger.GetLogger().Error("failed to get user email", zap.String("user_id", userId.String()), zap.Error(err))
 		return "", fmt.Errorf("failed to get user email: %w", err)
 	}
+
+	// Cache result in Redis
+	if err := r.Redis.Set(ctx, redisKey, userMail, 5*time.Minute); err != nil {
+		r.Logger.GetLogger().Warn("failed to cache user email in Redis", zap.Error(err))
+	}
+
 	return userMail, nil
 }
 

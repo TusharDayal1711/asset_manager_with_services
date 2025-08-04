@@ -8,7 +8,7 @@ import (
 )
 
 func main() {
-
+	
 	srv := server.ServerInit()
 	go srv.Start()
 	srv.Logger.GetLogger().Info("server initialized...")

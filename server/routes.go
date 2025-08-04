@@ -18,8 +18,9 @@ func (srv *Server) InjectRoutes() *chi.Mux {
 	//public routes
 	r.Route("/api", func(api chi.Router) {
 		api.Post("/user/register", srv.UserHandler.PublicRegister)
+		api.Post("/v2/user/register", srv.UserHandler.PublicRegisterThroughFirebase)
 		api.Post("/user/login", srv.UserHandler.UserLogin)
-		api.Post("/user/loginV2", srv.UserHandler.GoogleAuth)
+		api.Post("/v2/user/login", srv.UserHandler.GoogleAuth)
 		//api.Post("/createadmin", srv.UserHandler.CreateAdmin)
 
 		//protected

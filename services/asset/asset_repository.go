@@ -163,7 +163,6 @@ func (r *PostgresAssetRepository) AssignAssetByID(ctx context.Context, tx *sqlx.
 
 	if err != nil {
 		if err == sql.ErrNoRows {
-			// No existing assignment, proceed
 		} else {
 			return fmt.Errorf("failed to check existing assignment: %w", err)
 		}

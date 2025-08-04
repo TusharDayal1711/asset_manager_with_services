@@ -6,6 +6,7 @@ import (
 	"errors"
 	firebase "firebase.google.com/go/v4"
 	firebaseauth "firebase.google.com/go/v4/auth"
+	"github.com/sirupsen/logrus"
 	"google.golang.org/api/option"
 )
 
@@ -41,13 +42,10 @@ func (f *firebaseService) GetUserByEmail(ctx context.Context, email string) (*fi
 	return f.client.GetUserByEmail(ctx, email)
 }
 
-func (f *firebaseService) CreateUser(ctx context.Context, email, phone string) (*firebaseauth.UserRecord, error) {
+func (f *firebaseService) CreateUser(ctx context.Context, email string) (*firebaseauth.UserRecord, error) {
 	params := new(firebaseauth.UserToCreate)
 	if email != "" {
 		params = params.Email(email)
-	}
-	if phone != "" {
-		params = params.PhoneNumber(phone)
 	}
 	userRecords, err := f.client.CreateUser(context.Background(), params)
 	if err != nil {
@@ -66,4 +64,13 @@ func (f *firebaseService) GetEmailFromUID(ctx context.Context, uid string) (*fir
 
 func (f *firebaseService) CustomToken(ctx context.Context, uid string) (string, error) {
 	return "", errors.New("testing...")
+}
+
+func (f *firebaseService) GetAuthUserID(ctx context.Context, email string) (string, error) {
+	user, err := f.client.GetUserByEmail(ctx, email)
+	if err != nil {
+		logrus.Errorf("GetAuthUserID: error getting User: %v", err)
+		return "", err
+	}
+	return user.UID, nil
 }

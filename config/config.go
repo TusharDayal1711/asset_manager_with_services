@@ -23,5 +23,7 @@ func GetDatabaseString() string {
 		os.Getenv("DB_PASSWORD"),
 		os.Getenv("DB_NAME"),
 		os.Getenv("DB_SSLMODE"),
+		os.Getenv("REDIS_PORT"),
+		os.Getenv("FIREBASE_CONFIG"),
 	)
 }
