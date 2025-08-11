@@ -6,16 +6,19 @@ import (
 	"asset/utils"
 	"context"
 	"errors"
-	"github.com/jmoiron/sqlx"
 	"net/http"
 	"strings"
+	"time"
+
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/jmoiron/sqlx"
 )
 
 type contextKey string
 
 const (
-	userContextKey  contextKey = "user_key"
-	rolesContextKey contextKey = "roles_key"
+	UserContextKey  contextKey = "user_key"
+	RolesContextKey contextKey = "roles_key"
 )
 
 type DefaultAuthMiddleware struct {
@@ -78,8 +81,8 @@ func (a *DefaultAuthMiddleware) JWTAuthMiddleware() func(http.Handler) http.Hand
 				return
 			}
 
-			ctx := context.WithValue(r.Context(), userContextKey, userID)
-			ctx = context.WithValue(ctx, rolesContextKey, roles)
+			ctx := context.WithValue(r.Context(), UserContextKey, userID)
+			ctx = context.WithValue(ctx, RolesContextKey, roles)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
@@ -110,13 +113,35 @@ func (a *DefaultAuthMiddleware) RequireRole(allowedRoles ...models.Role) func(ht
 }
 
 func (a *DefaultAuthMiddleware) GetUserAndRolesFromContext(r *http.Request) (string, []string, error) {
-	userID, ok := r.Context().Value(userContextKey).(string)
+	userID, ok := r.Context().Value(UserContextKey).(string)
 	if !ok {
 		return "", nil, errors.New("user ID not found in context")
 	}
-	roles, ok := r.Context().Value(rolesContextKey).([]string)
+	roles, ok := r.Context().Value(RolesContextKey).([]string)
 	if !ok {
 		return "", nil, errors.New("roles not found in context")
 	}
 	return userID, roles, nil
+}
+
+func (a *DefaultAuthMiddleware) GenerateJWT(userID string, roles []string) (string, error) {
+	claims := jwt.MapClaims{
+		"sub":   userID,
+		"roles": roles,
+		"typ":   "access",
+		"exp":   time.Now().Add(5 * time.Minute).Unix(),
+		"iat":   time.Now().Unix(),
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return token.SignedString(jwtSecretKey)
+}
+
+func (a *DefaultAuthMiddleware) GenerateRefreshToken(userID string) (string, error) {
+	claims := jwt.MapClaims{
+		"sub": userID,
+		"typ": "refresh",
+		"exp": time.Now().Add(7 * 24 * time.Hour).Unix(), // 7 days
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return token.SignedString(refreshTokenSecretKey)
 }

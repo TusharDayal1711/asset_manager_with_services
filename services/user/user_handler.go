@@ -5,13 +5,14 @@ import (
 	"asset/utils"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"strings"
+
 	"github.com/go-playground/validator/v10"
 	"github.com/google/uuid"
 	jsoniter "github.com/json-iterator/go"
 	"github.com/pkg/errors"
 	"go.uber.org/zap"
-	"net/http"
-	"strings"
 )
 
 type UserHandler struct {
@@ -161,9 +162,10 @@ func (h *UserHandler) PublicRegister(w http.ResponseWriter, r *http.Request) {
 	userID, firebaseUserID, err := h.Service.PublicRegister(r.Context(), req)
 	if err != nil {
 		h.Logger.GetLogger().Error("Public registration failed", zap.String("email", req.Email), zap.Error(err))
-		utils.RespondError(w, http.StatusBadRequest, err, err.Error())
+		utils.RespondError(w, http.StatusInternalServerError, err, "internal server error")
 		return
 	}
+
 	h.Logger.GetLogger().Info("Public registration successful", zap.String("userID", userID.String()))
 	w.WriteHeader(http.StatusCreated)
 	jsoniter.NewEncoder(w).Encode(map[string]interface{}{"message": "account created successfully", "userId": userID,
@@ -285,6 +287,9 @@ func (h *UserHandler) UserLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.Logger.GetLogger().Info("User login successful", zap.String("userID", userID.String()))
+	h.Logger.GetLogger().Info("access_token", zap.String("access_token", accessToken))
+	h.Logger.GetLogger().Info("refresh_token", zap.String("refresh_token", refreshToken))
+
 	utils.RespondJSON(w, http.StatusOK, map[string]interface{}{
 		"user_id":       userID,
 		"access_token":  accessToken,

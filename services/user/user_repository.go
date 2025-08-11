@@ -48,6 +48,26 @@ func NewUserRepository(db *sqlx.DB, log providers.ZapLoggerProvider, firebase pr
 	return &PostgresUserRepository{DB: db, Logger: log, Firebase: firebase, Redis: redis}
 }
 
+func (r *PostgresUserRepository) GetUserByEmail(ctx context.Context, userEmail string) (uuid.UUID, error) {
+	r.Logger.GetLogger().Info("fetching user by email", zap.String("email", userEmail))
+	var userId uuid.UUID
+
+	err := r.DB.GetContext(ctx, &userId, `
+		SELECT id FROM users
+		WHERE email = $1 AND archived_at IS NULL
+	`, userEmail)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			r.Logger.GetLogger().Warn("no user found for email", zap.String("email", userEmail), zap.Error(err))
+			return uuid.Nil, sql.ErrNoRows
+		}
+		r.Logger.GetLogger().Error("failed to fetch user by email", zap.String("email", userEmail), zap.Error(err))
+		return uuid.Nil, fmt.Errorf("failed to fetch user by email: %w", err)
+	}
+	r.Logger.GetLogger().Info("user found by email", zap.String("email", userEmail), zap.String("user_id", userId.String()))
+	return userId, nil
+}
+
 func (r *PostgresUserRepository) DeleteUserByID(ctx context.Context, userID uuid.UUID) (err error) {
 	r.Logger.GetLogger().Info("starting transaction to delete user by id", zap.String("user_id", userID.String()))
 	tx, err := r.DB.BeginTxx(ctx, nil)
@@ -117,26 +137,6 @@ func (r *PostgresUserRepository) DeleteUserByID(ctx context.Context, userID uuid
 	}
 	r.Logger.GetLogger().Info("user and associated records archived successfully", zap.String("user_id", userID.String()))
 	return nil
-}
-
-func (r *PostgresUserRepository) GetUserByEmail(ctx context.Context, userEmail string) (uuid.UUID, error) {
-	r.Logger.GetLogger().Info("fetching user by email", zap.String("email", userEmail))
-	var userId uuid.UUID
-
-	err := r.DB.GetContext(ctx, &userId, `
-		SELECT id FROM users
-		WHERE email = $1 AND archived_at IS NULL
-	`, userEmail)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			r.Logger.GetLogger().Warn("no user found for email", zap.String("email", userEmail), zap.Error(err))
-			return uuid.Nil, sql.ErrNoRows
-		}
-		r.Logger.GetLogger().Error("failed to fetch user by email", zap.String("email", userEmail), zap.Error(err))
-		return uuid.Nil, fmt.Errorf("failed to fetch user by email: %w", err)
-	}
-	r.Logger.GetLogger().Info("user found by email", zap.String("email", userEmail), zap.String("user_id", userId.String()))
-	return userId, nil
 }
 
 // //GetUSer

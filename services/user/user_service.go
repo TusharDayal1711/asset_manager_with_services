@@ -6,13 +6,14 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	firebaseauth "firebase.google.com/go/v4/auth"
 	"fmt"
+	"log"
+	"strings"
+
+	firebaseauth "firebase.google.com/go/v4/auth"
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
 	"go.uber.org/zap"
-	"log"
-	"strings"
 )
 
 type UserService interface {
@@ -30,18 +31,19 @@ type UserService interface {
 	FirebaseUserRegistration(ctx context.Context, idToken string) (*FirebaseRegistrationResponse, error)
 }
 
-type userService struct {
-	repo     UserRepository
-	db       *sqlx.DB
-	logger   providers.ZapLoggerProvider
-	firebase providers.FirebaseProvider
+type userServiceStruct struct {
+	repo           UserRepository
+	db             *sqlx.DB
+	logger         providers.ZapLoggerProvider
+	firebase       providers.FirebaseProvider
+	AuthMiddleware providers.AuthMiddlewareService
 }
 
-func NewUserService(repo UserRepository, db *sqlx.DB, logger providers.ZapLoggerProvider, firebase providers.FirebaseProvider) UserService {
-	return &userService{repo: repo, db: db, logger: logger, firebase: firebase}
+func NewUserService(repo UserRepository, db *sqlx.DB, logger providers.ZapLoggerProvider, firebase providers.FirebaseProvider, AuthMiddleware providers.AuthMiddlewareService) UserService {
+	return &userServiceStruct{repo: repo, db: db, logger: logger, firebase: firebase, AuthMiddleware: AuthMiddleware}
 }
 
-func (s *userService) ChangeUserRole(ctx context.Context, req UpdateUserRoleReq, adminID uuid.UUID) error {
+func (s *userServiceStruct) ChangeUserRole(ctx context.Context, req UpdateUserRoleReq, adminID uuid.UUID) error {
 	s.logger.GetLogger().Info("change user role", zap.String("targetUserID", req.UserID), zap.String("newRole", req.Role), zap.String("adminID", adminID.String()))
 	tx, err := s.db.BeginTxx(ctx, nil)
 	if err != nil {
@@ -83,7 +85,7 @@ func (s *userService) ChangeUserRole(ctx context.Context, req UpdateUserRoleReq,
 	return nil
 }
 
-func (s *userService) DeleteUser(ctx context.Context, userID uuid.UUID, managerRole string) error {
+func (s *userServiceStruct) DeleteUser(ctx context.Context, userID uuid.UUID, managerRole string) error {
 	s.logger.GetLogger().Info("inside delete user", zap.String("userID", userID.String()), zap.String("managerRole", managerRole))
 	userRole, err := s.repo.GetUserRoleById(ctx, userID)
 	if err != nil {
@@ -123,7 +125,7 @@ func (s *userService) DeleteUser(ctx context.Context, userID uuid.UUID, managerR
 	return nil
 }
 
-func (s *userService) GetEmployeesWithFilters(ctx context.Context, filter EmployeeFilter) ([]EmployeeResponseModel, error) {
+func (s *userServiceStruct) GetEmployeesWithFilters(ctx context.Context, filter EmployeeFilter) ([]EmployeeResponseModel, error) {
 	s.logger.GetLogger().Info("fetching employees with filters", zap.Any("filter", filter))
 	employees, err := s.repo.GetFilteredEmployeesWithAssets(ctx, filter)
 	if err != nil {
@@ -134,7 +136,7 @@ func (s *userService) GetEmployeesWithFilters(ctx context.Context, filter Employ
 	return employees, nil
 }
 
-func (s *userService) GetEmployeeTimeline(ctx context.Context, userID uuid.UUID) ([]UserTimelineRes, error) {
+func (s *userServiceStruct) GetEmployeeTimeline(ctx context.Context, userID uuid.UUID) ([]UserTimelineRes, error) {
 	s.logger.GetLogger().Info("fetching employee timeline", zap.String("userID", userID.String()))
 	timeline, err := s.repo.GetUserAssetTimeline(ctx, userID)
 	if err != nil {
@@ -145,7 +147,7 @@ func (s *userService) GetEmployeeTimeline(ctx context.Context, userID uuid.UUID)
 	return timeline, nil
 }
 
-func (s *userService) PublicRegister(ctx context.Context, req PublicUserReq) (uuid.UUID, string, error) {
+func (s *userServiceStruct) PublicRegister(ctx context.Context, req PublicUserReq) (uuid.UUID, string, error) {
 	s.logger.GetLogger().Info("starting public registration service", zap.String("email", req.Email))
 
 	tx, err := s.db.BeginTxx(ctx, nil)
@@ -309,7 +311,7 @@ func (s *userService) PublicRegister(ctx context.Context, req PublicUserReq) (uu
 //	return userID, nil
 //}
 
-func (s *userService) RegisterEmployeeByManager(ctx context.Context, req ManagerRegisterReq, managerID uuid.UUID) (uuid.UUID, error) {
+func (s *userServiceStruct) RegisterEmployeeByManager(ctx context.Context, req ManagerRegisterReq, managerID uuid.UUID) (uuid.UUID, error) {
 	s.logger.GetLogger().Info("Starting employee registration by manager", zap.String("managerID", managerID.String()), zap.String("employeeEmail", req.Email))
 
 	tx, err := s.db.BeginTxx(ctx, nil)
@@ -352,7 +354,7 @@ func (s *userService) RegisterEmployeeByManager(ctx context.Context, req Manager
 	return userID, nil
 }
 
-func (s *userService) UpdateEmployee(ctx context.Context, req UpdateEmployeeReq, managerID uuid.UUID) error {
+func (s *userServiceStruct) UpdateEmployee(ctx context.Context, req UpdateEmployeeReq, managerID uuid.UUID) error {
 	s.logger.GetLogger().Info("Attempting to update employee information")
 	err := s.repo.UpdateEmployeeInfo(ctx, req, managerID)
 	if err != nil {
@@ -363,7 +365,7 @@ func (s *userService) UpdateEmployee(ctx context.Context, req UpdateEmployeeReq,
 	return nil
 }
 
-func (s *userService) GetDashboard(ctx context.Context, userID uuid.UUID) (UserDashboardRes, error) {
+func (s *userServiceStruct) GetDashboard(ctx context.Context, userID uuid.UUID) (UserDashboardRes, error) {
 	s.logger.GetLogger().Info("Fetching user dashboard data", zap.String("userID", userID.String()))
 	dashboard, err := s.repo.GetUserDashboardById(ctx, userID)
 	if err != nil {
@@ -374,7 +376,7 @@ func (s *userService) GetDashboard(ctx context.Context, userID uuid.UUID) (UserD
 	return dashboard, nil
 }
 
-func (s *userService) UserLogin(ctx context.Context, req PublicUserReq) (uuid.UUID, string, string, error) {
+func (s *userServiceStruct) UserLogin(ctx context.Context, req PublicUserReq) (uuid.UUID, string, string, error) {
 	s.logger.GetLogger().Info("Attempting user login", zap.String("email", req.Email))
 	userID, err := s.repo.GetUserByEmail(ctx, req.Email)
 	if err != nil {
@@ -398,12 +400,13 @@ func (s *userService) UserLogin(ctx context.Context, req PublicUserReq) (uuid.UU
 	}
 	s.logger.GetLogger().Debug("User role retrieved for login", zap.String("userID", userID.String()), zap.String("role", userRole))
 
-	accessToken, err := middlewares.GenerateJWT(userID.String(), []string{userRole})
+	//accessToken, err := middlewares.GenerateJWT(userID.String(), []string{userRole})
+	accessToken, err := s.AuthMiddleware.GenerateJWT(userID.String(), []string{userRole})
 	if err != nil {
 		s.logger.GetLogger().Error("Failed to generate access token during login", zap.String("userID", userID.String()), zap.Error(err))
 		return uuid.Nil, "", "", err
 	}
-	refreshToken, err := middlewares.GenerateRefreshToken(userID.String())
+	refreshToken, err := s.AuthMiddleware.GenerateRefreshToken(userID.String())
 	if err != nil {
 		s.logger.GetLogger().Error("Failed to generate refresh token during login", zap.String("userID", userID.String()), zap.Error(err))
 		return uuid.Nil, "", "", err
@@ -412,7 +415,7 @@ func (s *userService) UserLogin(ctx context.Context, req PublicUserReq) (uuid.UU
 	return userID, accessToken, refreshToken, nil
 }
 
-func (s *userService) GoogleAuth(ctx context.Context, idToken string) (uuid.UUID, string, string, error) {
+func (s *userServiceStruct) GoogleAuth(ctx context.Context, idToken string) (uuid.UUID, string, string, error) {
 	s.logger.GetLogger().Info("Starting Google authentication process")
 	token, err := s.repo.GetFirebase().VerifyIDToken(ctx, idToken)
 	if err != nil {
@@ -476,7 +479,7 @@ func (s *userService) GoogleAuth(ctx context.Context, idToken string) (uuid.UUID
 	return userID, accessToken, refreshToken, nil
 }
 
-func (s *userService) CreateFirstAdmin() bool {
+func (s *userServiceStruct) CreateFirstAdmin() bool {
 	const adminEmail = "systemadmin@remotestate.com"
 	const adminUsername = "System Admin"
 	const Role = "admin"
@@ -543,7 +546,7 @@ type FirebaseRegistrationResponse struct {
 	FirebaseUID string
 }
 
-func (s *userService) FirebaseUserRegistration(ctx context.Context, idToken string) (*FirebaseRegistrationResponse, error) {
+func (s *userServiceStruct) FirebaseUserRegistration(ctx context.Context, idToken string) (*FirebaseRegistrationResponse, error) {
 	s.logger.GetLogger().Info("Starting Firebase user registration")
 
 	//verify ID Token
